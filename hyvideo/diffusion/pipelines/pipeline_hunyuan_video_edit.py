@@ -852,7 +852,9 @@ class HunyuanVideoPipeline(DiffusionPipeline):
 
         for i, t in enumerate(timesteps):
             # 打印 i 和 t
-            print(f"Step {i}: t = {t}")        
+            print(f"Step {i}: t = {t}")       
+        # 使用 torch.cat 进行追加
+        timesteps = torch.cat((timesteps, torch.tensor([1000.0], dtype=torch.float32).to(timesteps.device))) 
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t_curr in enumerate(timesteps[:-1]):
@@ -860,6 +862,7 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                     continue
                     
                 t_prev = timesteps[i + 1]
+                print(f"Step {i}: t_curr = {t_curr}, t_prev = {t_prev}")
                 
                 # 1. 计算初始预测
                 latent_model_input = (
@@ -910,7 +913,7 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                 t_prev = t_prev.to(torch.float32) 
                 t_curr = t_curr.to(torch.float32)
 
-                latents_mid = latents + (t_prev - t_curr) / 2 * noise_pred
+                latents_mid = latents + ((t_prev - t_curr)/1000) / 2 * noise_pred
 
                 t_mid = t_curr + (t_prev - t_curr) / 2
                 t_expand_mid = t_mid.repeat(latent_model_input.shape[0])
@@ -962,12 +965,12 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                 t_prev = t_prev.to(torch.float32)
                 t_curr = t_curr.to(torch.float32)
                 
-                first_order = (noise_pred_mid - noise_pred) / ((t_prev - t_curr) / 2)
+                first_order = (noise_pred_mid - noise_pred) / (((t_prev - t_curr)/1000) / 2)
 
                 # 4. 更新潜变量 - 使用float32
                 latents = latents.to(torch.float32)
                 delta_t = t_prev - t_curr
-                latents = latents + delta_t * noise_pred + 0.5 * delta_t ** 2 * first_order
+                latents = latents + (delta_t/1000) * noise_pred + 0.5 * (delta_t/1000) ** 2 * first_order
                 
                 # 恢复原始精度
                 latents = latents.to(target_dtype)
@@ -1133,13 +1136,16 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         for i, t in enumerate(timesteps):
             # 打印 i 和 t 
             print(f"Step {i}: t = {t}")
+        # 使用 torch.cat 进行追加
+        timesteps = torch.cat((timesteps, torch.tensor([0.0], dtype=torch.float32).to(timesteps.device)))
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
-            for i, t_curr in enumerate(timesteps[:-1]):  # 注意这里需要改成[:-1]因为我们要访问i+1
+            for i, t_curr in enumerate(timesteps[:-1]): 
                 if self.interrupt:
                     continue
                     
                 t_prev = timesteps[i + 1]
+                print(f"Step {i}: t_curr = {t_curr}, t_prev = {t_prev}")
 
                 # 1. 计算初始预测
                 latent_model_input = (
@@ -1191,7 +1197,7 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                 t_curr = t_curr.to(torch.float32)
 
                 # 计算中点的潜变量
-                latents_mid = latents + (t_prev - t_curr) / 2 * noise_pred
+                latents_mid = latents + ((t_prev - t_curr)/1000) / 2 * noise_pred
 
                 # 计算中点的时间步
                 t_mid = t_curr + (t_prev - t_curr) / 2
@@ -1242,11 +1248,11 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                 # 3. 计算一阶导数 - 使用float32
                 noise_pred = noise_pred.to(torch.float32)
                 noise_pred_mid = noise_pred_mid.to(torch.float32)
-                first_order = (noise_pred_mid - noise_pred) / ((t_prev - t_curr) / 2)
+                first_order = (noise_pred_mid - noise_pred) / (((t_prev - t_curr)/1000) / 2)
 
                 # 4. 更新潜变量 - 使用float32
                 delta_t = t_prev - t_curr
-                latents = latents + delta_t * noise_pred + 0.5 * delta_t ** 2 * first_order
+                latents = latents + (delta_t/1000) * noise_pred + 0.5 * (delta_t/1000) ** 2 * first_order
 
                 # 恢复原始精度
                 latents = latents.to(target_dtype)

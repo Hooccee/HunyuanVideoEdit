@@ -239,6 +239,7 @@ class FlowMatchDiscreteScheduler(SchedulerMixin, ConfigMixin):
         sample = sample.to(torch.float32)
 
         dt = self.sigmas[self.step_index + 1] - self.sigmas[self.step_index]
+        print(f"index: {self.sigmas[self.step_index]},index+1: {self.sigmas[self.step_index + 1]}")
 
         if self.config.solver == "euler":
             prev_sample = sample + model_output.to(torch.float32) * dt

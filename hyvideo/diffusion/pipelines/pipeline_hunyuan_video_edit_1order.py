@@ -858,7 +858,8 @@ class HunyuanVideoPipeline(DiffusionPipeline):
             for i, t in enumerate(timesteps):
                 if self.interrupt:
                     continue
-
+                
+                print(f"Step {i}: t = {t}")
                 latent_model_input = (
                     torch.cat([latents] * 2)
                     if self.do_classifier_free_guidance
