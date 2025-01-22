@@ -5,15 +5,17 @@ from pathlib import Path
 from loguru import logger
 from datetime import datetime
 
-from hyvideo.utils.file_utils import save_videos_grid
+from hyvideo.utils.file_utils import save_videos_grid,video_to_tensor
 from hyvideo.config import parse_args
 from hyvideo.inference import HunyuanVideoSampler
+import pprint
 
 
 
 def main():
     args = parse_args()
-    print(args)
+    pp = pprint.PrettyPrinter(width=80, compact=True)
+    pp.pprint(vars(args))
     models_root_path = Path(args.model_base)
     if not models_root_path.exists():
         raise ValueError(f"`models_root` not exists: {models_root_path}")
@@ -28,11 +30,21 @@ def main():
     
     # Get the updated args
     args = hunyuan_video_sampler.args
+    print("Updated args:")
+    pp.pprint(vars(args))
+
+    video_tensor = video_to_tensor(args.inverse_video_path,args.video_size,video_length=args.video_length, rescale=True)
+    print()  # 输出张量的形状
+
+
+
 
     # Start sampling
     # TODO: batch inference check
     outputs = hunyuan_video_sampler.predict(
         prompt=args.prompt, 
+        target_prompt=args.target_prompt,
+        video_tensor=video_tensor,
         height=args.video_size[0],
         width=args.video_size[1],
         video_length=args.video_length,
@@ -46,14 +58,17 @@ def main():
         embedded_guidance_scale=args.embedded_cfg_scale
     )
     samples = outputs['samples']
-    
+    # samples = [video_tensor]
     # Save samples
     if 'LOCAL_RANK' not in os.environ or int(os.environ['LOCAL_RANK']) == 0:
         for i, sample in enumerate(samples):
             sample = samples[i].unsqueeze(0)
             time_flag = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d-%H:%M:%S")
             save_path = f"{save_path}/{time_flag}_seed{outputs['seeds'][i]}_{outputs['prompts'][i][:100].replace('/','')}.mp4"
-            save_videos_grid(sample, save_path, fps=24)
+            # save_path = f"{save_path}/{time_flag}.mp4"
+            save_videos_grid(sample, save_path, fps=24,
+                            #  rescale=True
+                             )
             logger.info(f'Sample save to: {save_path}')
 
 if __name__ == "__main__":

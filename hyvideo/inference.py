@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple, Union
 from pathlib import Path
 from loguru import logger
 
+from regex import F
 import torch
 import torch.distributed as dist
 from hyvideo.constants import PROMPT_TEMPLATE, NEGATIVE_PROMPT, PRECISION_TO_TYPE
@@ -187,6 +188,8 @@ class Inference(object):
 
         # =========================== Build main model ===========================
         logger.info("Building model...")
+        print(device)
+        device = "cpu"
         factor_kwargs = {"device": device, "dtype": PRECISION_TO_TYPE[args.precision]}
         in_channels = args.latent_channels
         out_channels = args.latent_channels
@@ -199,12 +202,14 @@ class Inference(object):
         )
         if args.use_fp8:
             convert_fp8_linear(model, args.dit_weight, original_dtype=PRECISION_TO_TYPE[args.precision])
+        device = "cuda"
         model = model.to(device)
         model = Inference.load_state_dict(args, model, pretrained_model_path)
         model.eval()
 
         # ============================= Build extra models ========================
         # VAE
+        print("loading vae")
         vae, _, s_ratio, t_ratio = load_vae(
             args.vae,
             args.vae_precision,
@@ -416,6 +421,7 @@ class HunyuanVideoSampler(Inference):
         text_encoder_2,
         model,
         scheduler=None,
+        scheduler_reverse=None,
         device=None,
         progress_bar_config=None,
         data_type="video",
@@ -430,6 +436,16 @@ class HunyuanVideoSampler(Inference):
                 )
             else:
                 raise ValueError(f"Invalid denoise type {args.denoise_type}")
+        """Load the denoising scheduler_reverse for inference."""
+        if scheduler_reverse is None:
+            if args.denoise_type == "flow":
+                scheduler_reverse = FlowMatchDiscreteScheduler(
+                    shift=args.flow_shift,
+                    reverse=False,
+                    solver=args.flow_solver,
+                )
+            else:
+                raise ValueError(f"Invalid denoise type {args.denoise_type}")
 
         pipeline = HunyuanVideoPipeline(
             vae=vae,
@@ -437,11 +453,16 @@ class HunyuanVideoSampler(Inference):
             text_encoder_2=text_encoder_2,
             transformer=model,
             scheduler=scheduler,
+            scheduler_reverse=scheduler_reverse,
             progress_bar_config=progress_bar_config,
             args=args,
         )
         if self.use_cpu_offload:
-            pipeline.enable_sequential_cpu_offload()
+            pipeline.enable_sequential_cpu_offload(device="cuda")
+            pipeline.vae.enable_tiling()
+            print("Enable sequential CPU offload.")
+            # pipeline.enable_model_cpu_offload ()
+            # print("Enable model CPU offload.")
         else:
             pipeline = pipeline.to(device)
 
@@ -498,6 +519,8 @@ class HunyuanVideoSampler(Inference):
     def predict(
         self,
         prompt,
+        target_prompt,
+        video_tensor,
         height=192,
         width=336,
         video_length=129,
@@ -642,9 +665,14 @@ class HunyuanVideoSampler(Inference):
         # ========================================================================
         # Pipeline inference
         # ========================================================================
+
+
         start_time = time.time()
         samples = self.pipeline(
-            prompt=prompt,
+            video_tensor=video_tensor,
+            source_prompt=prompt,
+            target_prompt=target_prompt,
+            # prompt=prompt,
             height=target_height,
             width=target_width,
             video_length=target_video_length,

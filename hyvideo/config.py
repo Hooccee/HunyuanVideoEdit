@@ -12,6 +12,7 @@ def parse_args(namespace=None):
     parser = add_denoise_schedule_args(parser)
     parser = add_inference_args(parser)
     parser = add_parallel_args(parser)
+    parser = add_edit_args(parser)
 
     args = parser.parse_args(namespace=namespace)
     args = sanity_check_args(args)
@@ -380,6 +381,24 @@ def add_parallel_args(parser: argparse.ArgumentParser):
 
     return parser
 
+# ======================== Edit setting ========================
+def add_edit_args(parser: argparse.ArgumentParser):
+    group = parser.add_argument_group(title="Edit args")
+    group.add_argument(
+        "--inverse-video-path",
+        type=str,
+        default="/home/chx/mySrc/HunyuanVideo",
+        help="Path to the video that needs to be inversed.",
+    )
+    
+    group.add_argument(
+        "--target-prompt",
+        type=str,
+        default=None,
+        help="Target prompt for inference.",
+    )
+
+    return parser
 
 def sanity_check_args(args):
     # VAE channels
@@ -396,3 +415,4 @@ def sanity_check_args(args):
             f"Latent channels ({args.latent_channels}) must match the VAE channels ({vae_channels})."
         )
     return args
+
