@@ -35,11 +35,11 @@ def main():
     pp.pprint(vars(args))
 
 
-    video_capture = cv2.VideoCapture(video_path)
+    video_capture = cv2.VideoCapture(args.inverse_video_path)
 
     # 检查视频是否成功打开
     if not video_capture.isOpened():
-        print(f"Error: Could not open video file {video_path}")
+        print(f"Error: Could not open video file {args.inverse_video_path}")
     else:
         # 获取帧率
         fps = video_capture.get(cv2.CAP_PROP_FPS)
