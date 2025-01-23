@@ -159,7 +159,7 @@ class MMDoubleStreamBlock(nn.Module):
             txt_mod2_gate,
         ) = self.txt_mod(vec).chunk(6, dim=-1)
 
-        print("dou_cross_attention_kwargs id:",id(cross_attention_kwargs))
+        # print("dou_cross_attention_kwargs id:",id(cross_attention_kwargs))
 
         # Prepare image for attention.
         img_modulated = self.img_norm1(img)
@@ -363,8 +363,8 @@ class MMSingleStreamBlock(nn.Module):
             else:
                 v = cross_attention_kwargs['feature'][feature_name].cuda()
         
-        print(f"sin_cross_attention_kwargs:{cross_attention_kwargs}")
-        print("sin_cross_attention_kwargs id:",id(cross_attention_kwargs))
+            print(f"feature:{feature_name},shape:{len(cross_attention_kwargs['feature'])}")
+            print("sin_cross_attention_kwargs id:",id(cross_attention_kwargs))
 
         # Apply RoPE if needed.
         if freqs_cis is not None:

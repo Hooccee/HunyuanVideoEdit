@@ -892,11 +892,11 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                     else None
                 )
 
-                cross_attention_kwargs['t'] = t_prev 
+                cross_attention_kwargs['t'] = i+1 
                 cross_attention_kwargs['inverse'] = True
                 cross_attention_kwargs['second_order'] = False
                 cross_attention_kwargs['inject'] = inject_list[i]
-                print(f"cross_attention_kwargs:{cross_attention_kwargs}")
+                print(f"t:{cross_attention_kwargs['t']}")
                 print("inv_cross_attention_kwargs id:",id(cross_attention_kwargs))
 
                 with torch.autocast(
@@ -1050,6 +1050,8 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         embedded_guidance_scale: Optional[float] = None,
         **kwargs,
     ):
+
+        print(f"reverse_cross_attention_kwargs = {cross_attention_kwargs}")
         # 1. Prepare the target prompt embeddings
         device = torch.device(f"cuda:{dist.get_rank()}") if dist.is_initialized() else self._execution_device
         (
@@ -1156,6 +1158,8 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         # 使用 torch.cat 进行追加
         timesteps = torch.cat((timesteps, torch.tensor([0.0], dtype=torch.float32).to(timesteps.device)))
 
+        inject_list = [True] * cross_attention_kwargs['inject_step'] + [False] * (len(timesteps[:-1]) - cross_attention_kwargs['inject_step'])
+
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t_curr in enumerate(timesteps[:-1]): 
                 if self.interrupt:
@@ -1185,6 +1189,12 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                     if embedded_guidance_scale is not None
                     else None
                 )
+                cross_attention_kwargs['t'] = num_inference_steps-i #TODO: 改为使用index
+                cross_attention_kwargs['inverse'] = False
+                cross_attention_kwargs['second_order'] = False
+                cross_attention_kwargs['inject'] = inject_list[i]
+                print(f"t:{cross_attention_kwargs['t']}")
+                print("rev_cross_attention_kwargs id:",id(cross_attention_kwargs))
 
                 with torch.autocast(
                     device_type="cuda", dtype=target_dtype, enabled=autocast_enabled
@@ -1198,6 +1208,7 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                         freqs_cos=freqs_cis[0],
                         freqs_sin=freqs_cis[1],
                         guidance=guidance_expand,
+                        cross_attention_kwargs=cross_attention_kwargs,
                         return_dict=True,
                     )["x"]
 
@@ -1246,6 +1257,7 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                         freqs_cos=freqs_cis[0],
                         freqs_sin=freqs_cis[1],
                         guidance=guidance_expand,
+                        cross_attention_kwargs=cross_attention_kwargs,
                         return_dict=True,
                     )["x"]
 
