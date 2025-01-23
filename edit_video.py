@@ -1,5 +1,6 @@
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+import cv2
 import time
 from pathlib import Path
 from loguru import logger
@@ -33,8 +34,22 @@ def main():
     print("Updated args:")
     pp.pprint(vars(args))
 
+
+    video_capture = cv2.VideoCapture(video_path)
+
+    # 检查视频是否成功打开
+    if not video_capture.isOpened():
+        print(f"Error: Could not open video file {video_path}")
+    else:
+        # 获取帧率
+        fps = video_capture.get(cv2.CAP_PROP_FPS)
+        print(f"FPS of the video: {fps}")
+
+    # 释放视频捕获对象
+    video_capture.release()
+
     video_tensor = video_to_tensor(args.inverse_video_path,args.video_size,video_length=args.video_length, rescale=True)
-    print()  # 输出张量的形状
+
 
 
 
@@ -68,7 +83,7 @@ def main():
             time_flag = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d-%H:%M:%S")
             save_path = f"{save_path}/{time_flag}_seed{outputs['seeds'][i]}_{outputs['prompts'][i][:100].replace('/','')}.mp4"
             # save_path = f"{save_path}/{time_flag}.mp4"
-            save_videos_grid(sample, save_path, fps=24,
+            save_videos_grid(sample, save_path, fps=fps,
                             #  rescale=True
                              )
             logger.info(f'Sample save to: {save_path}')
