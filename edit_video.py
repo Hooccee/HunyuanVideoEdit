@@ -44,6 +44,8 @@ def main():
     outputs = hunyuan_video_sampler.predict(
         prompt=args.prompt, 
         target_prompt=args.target_prompt,
+        inject=args.inject,
+        feature_path=args.feature_path,
         video_tensor=video_tensor,
         height=args.video_size[0],
         width=args.video_size[1],

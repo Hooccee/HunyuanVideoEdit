@@ -398,6 +398,20 @@ def add_edit_args(parser: argparse.ArgumentParser):
         help="Target prompt for inference.",
     )
 
+    group.add_argument(
+        '--inject',
+        type=int,
+        default=5,
+        help='the number of timesteps which apply the feature sharing'
+    )
+
+    group.add_argument(
+        '--feature-path',
+        type=str,
+        default='feature',
+        help='the path to save the feature'
+    )
+
     return parser
 
 def sanity_check_args(args):

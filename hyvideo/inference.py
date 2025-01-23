@@ -520,6 +520,8 @@ class HunyuanVideoSampler(Inference):
         self,
         prompt,
         target_prompt,
+        inject,
+        feature_path,
         video_tensor,
         height=192,
         width=336,
@@ -667,12 +669,22 @@ class HunyuanVideoSampler(Inference):
         # ========================================================================
 
 
+        joint_attention_kwargs = {}
+        joint_attention_kwargs['feature_path'] = feature_path
+        joint_attention_kwargs['feature'] = {}
+        joint_attention_kwargs['inject_step'] = inject
+        if not os.path.exists(feature_path):
+            os.mkdir(feature_path)
+
         start_time = time.time()
         samples = self.pipeline(
             video_tensor=video_tensor,
             source_prompt=prompt,
             target_prompt=target_prompt,
             # prompt=prompt,
+            cross_attention_kwargs=joint_attention_kwargs,
+            # inject=inject,
+            # feature_path=feature_path,
             height=target_height,
             width=target_width,
             video_length=target_video_length,

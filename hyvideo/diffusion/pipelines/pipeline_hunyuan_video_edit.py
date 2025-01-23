@@ -16,6 +16,7 @@
 # Modified from diffusers==0.29.2
 #
 # ==============================================================================
+import os
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 import torch
@@ -754,6 +755,8 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         ) and not self.args.disable_autocast
 
 
+        print(f"inverse_cross_attention_kwargs = {cross_attention_kwargs}")
+
 
         # 2. Prepare the source prompt embeddings
 
@@ -852,9 +855,12 @@ class HunyuanVideoPipeline(DiffusionPipeline):
 
         for i, t in enumerate(timesteps):
             # 打印 i 和 t
-            print(f"Step {i}: t = {t}")       
+            print(f"Step {i}: t = {t}")
         # 使用 torch.cat 进行追加
         timesteps = torch.cat((timesteps, torch.tensor([1000.0], dtype=torch.float32).to(timesteps.device))) 
+
+        inject_list = [True] * cross_attention_kwargs['inject_step'] + [False] * (len(timesteps[:-1]) - cross_attention_kwargs['inject_step'])
+        inject_list = inject_list[::-1] 
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t_curr in enumerate(timesteps[:-1]):
@@ -886,6 +892,13 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                     else None
                 )
 
+                cross_attention_kwargs['t'] = t_prev 
+                cross_attention_kwargs['inverse'] = True
+                cross_attention_kwargs['second_order'] = False
+                cross_attention_kwargs['inject'] = inject_list[i]
+                print(f"cross_attention_kwargs:{cross_attention_kwargs}")
+                print("inv_cross_attention_kwargs id:",id(cross_attention_kwargs))
+
                 with torch.autocast(
                     device_type="cuda", dtype=target_dtype, enabled=autocast_enabled
                 ):
@@ -898,6 +911,7 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                         freqs_cos=freqs_cis[0],
                         freqs_sin=freqs_cis[1],
                         guidance=guidance_expand,
+                        cross_attention_kwargs=cross_attention_kwargs,
                         return_dict=True,
                     )["x"]
 
@@ -931,6 +945,8 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                     latent_model_input_mid, t_mid
                 )
 
+                cross_attention_kwargs['second_order'] = True
+
                 with torch.autocast(
                     device_type="cuda", dtype=target_dtype, enabled=autocast_enabled
                 ):
@@ -943,6 +959,7 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                         freqs_cos=freqs_cis[0],
                         freqs_sin=freqs_cis[1],
                         guidance=guidance_expand,
+                        cross_attention_kwargs=cross_attention_kwargs,
                         return_dict=True,
                     )["x"]
 
@@ -1285,6 +1302,8 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         video_tensor: torch.Tensor,
         source_prompt: Union[str, List[str]],
         target_prompt: Union[str, List[str]],
+        # inject: int,
+        # feature_path: str,
         height: int,
         width: int,
         video_length: int,
@@ -1327,28 +1346,50 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         Generate video from text prompts.
 
         Args:
-            video_tensor (torch.Tensor): Input video tensor.
-            source_prompt (Union[str, List[str]]): Source text prompt.
-            target_prompt (Union[str, List[str]]): Target text prompt.
-            height (int): Height of the video.
-            width (int): Width of the video.
-            video_length (int): Length of the video.
-            data_type (str, optional): Type of data. Defaults to "video".
-            num_inference_steps (int, optional): Number of inference steps. Defaults to 50.
-            timesteps (List[int], optional): Timesteps for inference. Defaults to None.
-            sigmas (List[float], optional): Sigmas for inference. Defaults to None.
-            guidance_scale (float, optional): Guidance scale. Defaults to 7.5.
-            negative_prompt (Optional[Union[str, List[str]]], optional): Negative text prompt. Defaults to None.
-            num_videos_per_prompt (Optional[int], optional): Number of videos per prompt. Defaults to 1.
-            eta (float, optional): Eta for inference. Defaults to 0.0.
-            generator (Optional[Union[torch.Generator, List[torch.Generator]]], optional): Generator for random numbers. Defaults to None.
-            latents (Optional[torch.Tensor], optional): Latents for inference. Defaults to None.
-            prompt_embeds (Optional[torch.Tensor], optional): Prompt embeddings. Defaults to None.
-            attention_mask (Optional[torch.Tensor], optional): Attention mask. Defaults to None.
-            negative_prompt_embeds (Optional[torch.Tensor], optional): Negative prompt embeddings. Defaults to None.
-            negative_attention_mask (Optional[torch.Tensor], optional): Negative attention mask. Defaults to None.
-            output_type (Optional[str], optional): Output type. Defaults to "pil".
-            return_dict (bool, optional): Whether to return a dictionary. Defaults to True.
+            video_tensor (torch.Tensor): 
+                Input video tensor.
+            source_prompt (Union[str, List[str]]): 
+                Source text prompt.
+            target_prompt (Union[str, List[str]]): 
+                Target text prompt.
+            height (int): 
+                Height of the video.
+            width (int): 
+                Width of the video.
+            video_length (int): L
+                ength of the video.
+            data_type (str, optional): 
+                Type of data. Defaults to "video".
+            num_inference_steps (int, optional): 
+                Number of inference steps. Defaults to 50.
+            timesteps (List[int], optional): 
+                Timesteps for inference. Defaults to None.
+            sigmas (List[float], optional): 
+                Sigmas for inference. Defaults to None.
+            guidance_scale (float, optional): 
+                Guidance scale. Defaults to 7.5.
+            negative_prompt (Optional[Union[str, List[str]]], optional): 
+                Negative text prompt. Defaults to None.
+            num_videos_per_prompt (Optional[int], optional): 
+                Number of videos per prompt. Defaults to 1.
+            eta (float, optional): 
+                Eta for inference. Defaults to 0.0.
+            generator (Optional[Union[torch.Generator, List[torch.Generator]]], optional):
+                Generator for random numbers. Defaults to None.
+            latents (Optional[torch.Tensor], optional): 
+                Latents for inference. Defaults to None.
+            prompt_embeds (Optional[torch.Tensor], optional): 
+                Prompt embeddings. Defaults to None.
+            attention_mask (Optional[torch.Tensor], optional): 
+                Attention mask. Defaults to None.
+            negative_prompt_embeds (Optional[torch.Tensor], optional): 
+                Negative prompt embeddings. Defaults to None.
+            negative_attention_mask (Optional[torch.Tensor], optional): 
+                Negative attention mask. Defaults to None.
+            output_type (Optional[str], optional): 
+                Output type. Defaults to "pil".
+            return_dict (bool, optional): 
+                Whether to return a dictionary. Defaults to True.
             cross_attention_kwargs (Optional[Dict[str, Any]], optional): Cross attention kwargs. Defaults to None.
             guidance_rescale (float, optional): Guidance rescale. Defaults to 0.0.
             clip_skip (Optional[int], optional): Clip skip. Defaults to None.

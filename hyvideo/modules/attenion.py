@@ -1,5 +1,6 @@
 import importlib.metadata
 import math
+from typing import Optional, Dict, Any
 
 import torch
 import torch.nn as nn
@@ -70,6 +71,15 @@ def attention(
     max_seqlen_q=None,
     max_seqlen_kv=None,
     batch_size=1,
+    # id: Optional[int] = None,
+    # inject: Optional[bool] = False,
+    # feature: Optional[Dict[str, Any]] = None,
+    # t: Optional[int] = None,
+    # second_order: Optional[Any] = None,
+    # inverse: Optional[bool] = False,
+    # type: Optional[str] = None,
+    # feature_path: Optional[str] = None,
+    # inject_step: Optional[int] = None,
 ):
     """
     Perform QKV self attention.
@@ -97,6 +107,18 @@ def attention(
     q = pre_attn_layout(q)
     k = pre_attn_layout(k)
     v = pre_attn_layout(v)
+
+    # print(f"attention_mode: {mode}")
+    # 打印参数值
+    # print(f"id: {id}")
+    # print(f"inject: {inject}")
+    # print(f"feature: {feature}")
+    # print(f"t: {t}")
+    # print(f"second_order: {second_order}")
+    # print(f"inverse: {inverse}")
+    # print(f"type: {type}")
+    # print(f"feature_path: {feature_path}")
+    # print(f"inject_step: {inject_step}")
 
     if mode == "torch":
         if attn_mask is not None and attn_mask.dtype != torch.bool:

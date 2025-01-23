@@ -1,3 +1,4 @@
+from math import cos
 from typing import Any, List, Tuple, Optional, Union, Dict
 from einops import rearrange
 
@@ -139,6 +140,7 @@ class MMDoubleStreamBlock(nn.Module):
         max_seqlen_q: Optional[int] = None,
         max_seqlen_kv: Optional[int] = None,
         freqs_cis: tuple = None,
+        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         (
             img_mod1_shift,
@@ -156,6 +158,8 @@ class MMDoubleStreamBlock(nn.Module):
             txt_mod2_scale,
             txt_mod2_gate,
         ) = self.txt_mod(vec).chunk(6, dim=-1)
+
+        print("dou_cross_attention_kwargs id:",id(cross_attention_kwargs))
 
         # Prepare image for attention.
         img_modulated = self.img_norm1(img)
@@ -199,6 +203,8 @@ class MMDoubleStreamBlock(nn.Module):
             cu_seqlens_q.shape[0] == 2 * img.shape[0] + 1
         ), f"cu_seqlens_q.shape:{cu_seqlens_q.shape}, img.shape[0]:{img.shape[0]}"
         
+
+        cross_attention_kwargs = cross_attention_kwargs or {}
         # attention computation start
         if not self.hybrid_seq_parallel_attn:
             attn = attention(
@@ -210,6 +216,7 @@ class MMDoubleStreamBlock(nn.Module):
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
                 batch_size=img_k.shape[0],
+                # **cross_attention_kwargs,
             )
         else:
             attn = parallel_attention(
@@ -333,6 +340,7 @@ class MMSingleStreamBlock(nn.Module):
         max_seqlen_q: Optional[int] = None,
         max_seqlen_kv: Optional[int] = None,
         freqs_cis: Tuple[torch.Tensor, torch.Tensor] = None,
+        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
     ) -> torch.Tensor:
         mod_shift, mod_scale, mod_gate = self.modulation(vec).chunk(3, dim=-1)
         x_mod = modulate(self.pre_norm(x), shift=mod_shift, scale=mod_scale)
@@ -345,6 +353,18 @@ class MMSingleStreamBlock(nn.Module):
         # Apply QK-Norm if needed.
         q = self.q_norm(q).to(v)
         k = self.k_norm(k).to(v)
+
+        # Apply RoPE 之前inject
+        # Save the features in the memory
+        if cross_attention_kwargs['inject'] and cross_attention_kwargs['id'] > 19:
+            feature_name = str(cross_attention_kwargs['t']) + '_' + str(cross_attention_kwargs['second_order']) + '_' + str(cross_attention_kwargs['id']) + '_' + cross_attention_kwargs['type'] + '_' + 'V'
+            if cross_attention_kwargs['inverse']:
+                cross_attention_kwargs['feature'][feature_name] = v.cpu()
+            else:
+                v = cross_attention_kwargs['feature'][feature_name].cuda()
+        
+        print(f"sin_cross_attention_kwargs:{cross_attention_kwargs}")
+        print("sin_cross_attention_kwargs id:",id(cross_attention_kwargs))
 
         # Apply RoPE if needed.
         if freqs_cis is not None:
@@ -363,6 +383,8 @@ class MMSingleStreamBlock(nn.Module):
             cu_seqlens_q.shape[0] == 2 * x.shape[0] + 1
         ), f"cu_seqlens_q.shape:{cu_seqlens_q.shape}, x.shape[0]:{x.shape[0]}"
         
+
+        cross_attention_kwargs = cross_attention_kwargs or {}
         # attention computation start
         if not self.hybrid_seq_parallel_attn:
             attn = attention(
@@ -374,6 +396,7 @@ class MMSingleStreamBlock(nn.Module):
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
                 batch_size=x.shape[0],
+                # **cross_attention_kwargs,
             )
         else:
             attn = parallel_attention(
@@ -602,6 +625,7 @@ class HYVideoDiffusionTransformer(ModelMixin, ConfigMixin):
         freqs_cos: Optional[torch.Tensor] = None,
         freqs_sin: Optional[torch.Tensor] = None,
         guidance: torch.Tensor = None,  # Guidance for modulation, should be cfg_scale x 1000.
+        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
     ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
         out = {}
@@ -662,14 +686,20 @@ class HYVideoDiffusionTransformer(ModelMixin, ConfigMixin):
                 max_seqlen_q,
                 max_seqlen_kv,
                 freqs_cis,
+                cross_attention_kwargs,
             ]
 
             img, txt = block(*double_block_args)
 
         # Merge txt and img to pass through single stream blocks.
         x = torch.cat((img, txt), 1)
+
+        cnt = 0
+        cross_attention_kwargs['type'] = 'single'
+
         if len(self.single_blocks) > 0:
             for _, block in enumerate(self.single_blocks):
+                cross_attention_kwargs['id'] = cnt
                 single_block_args = [
                     x,
                     vec,
@@ -679,10 +709,14 @@ class HYVideoDiffusionTransformer(ModelMixin, ConfigMixin):
                     max_seqlen_q,
                     max_seqlen_kv,
                     (freqs_cos, freqs_sin),
+                    cross_attention_kwargs,
                 ]
 
                 x = block(*single_block_args)
+                cnt += 1
 
+        cnt = 0
+        cross_attention_kwargs['id']= cnt
         img = x[:, :img_seq_len, ...]
 
         # ---------------------------- Final layer ------------------------------
