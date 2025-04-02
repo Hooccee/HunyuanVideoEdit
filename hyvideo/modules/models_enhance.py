@@ -356,13 +356,27 @@ class MMSingleStreamBlock(nn.Module):
 
         # Apply RoPE 之前inject
         # Save the features in the memory
-        if cross_attention_kwargs.get('op') is None or cross_attention_kwargs.get('op') == True:
+        # if cross_attention_kwargs['op'] is None or  (cross_attention_kwargs['op'] is not None and cross_attention_kwargs['op'] == True):
+        #     if cross_attention_kwargs['inject'] and cross_attention_kwargs['id'] > 19:
+        #         feature_name = str(cross_attention_kwargs['t']) + '_' + str(cross_attention_kwargs['second_order']) + '_' + str(cross_attention_kwargs['id']) + '_' + cross_attention_kwargs['type'] + '_' + 'V'
+        #         if cross_attention_kwargs['inverse']:
+        #             cross_attention_kwargs['feature'][feature_name] = v.cpu()
+        #         else:
+        #             v = cross_attention_kwargs['feature'][feature_name].cuda()
+
+        if cross_attention_kwargs['op'] is None or  (cross_attention_kwargs['op'] is not None and cross_attention_kwargs['op'] == True):
             if cross_attention_kwargs['inject'] and cross_attention_kwargs['id'] > 19:
-                feature_name = str(cross_attention_kwargs['t']) + '_' + str(cross_attention_kwargs['second_order']) + '_' + str(cross_attention_kwargs['id']) + '_' + cross_attention_kwargs['type'] + '_' + 'V'
+                feature_name = str(cross_attention_kwargs['t']) + '_' + str(cross_attention_kwargs['second_order']) + '_' + str(cross_attention_kwargs['id']) + '_' + cross_attention_kwargs['type'] + '_' + 'Q'
                 if cross_attention_kwargs['inverse']:
-                    cross_attention_kwargs['feature'][feature_name] = v.cpu()
+                    cross_attention_kwargs['feature'][feature_name] = q.cpu()
                 else:
-                    v = cross_attention_kwargs['feature'][feature_name].cuda()
+                    q = cross_attention_kwargs['feature'][feature_name].cuda()
+
+                feature_name = str(cross_attention_kwargs['t']) + '_' + str(cross_attention_kwargs['second_order']) + '_' + str(cross_attention_kwargs['id']) + '_' + cross_attention_kwargs['type'] + '_' + 'K'
+                if cross_attention_kwargs['inverse']:
+                    cross_attention_kwargs['feature'][feature_name] = k.cpu()
+                else:
+                    k = cross_attention_kwargs['feature'][feature_name].cuda()
             
                 #print(f"feature:{feature_name},shape:{len(cross_attention_kwargs['feature'])}")
                 #print("sin_cross_attention_kwargs id:",id(cross_attention_kwargs))

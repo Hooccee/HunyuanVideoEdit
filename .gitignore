@@ -2,3 +2,4 @@ __pycache__
 /ckpts/**/
 /results/
 ckpts
+**.log

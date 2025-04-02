@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = '1'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 import cv2
 import time
 from pathlib import Path
@@ -9,7 +9,7 @@ from datetime import datetime
 from hyvideo.utils.file_utils import save_videos_grid,video_to_tensor
 from hyvideo.config import parse_args
 from hyvideo.inference import HunyuanVideoSampler
-import pprint
+import pprint 
 
 
 

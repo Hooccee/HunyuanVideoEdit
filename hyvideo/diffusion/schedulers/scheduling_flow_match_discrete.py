@@ -146,8 +146,8 @@ class FlowMatchDiscreteScheduler(SchedulerMixin, ConfigMixin):
 
         if not self.config.reverse:
             print("sigmas_reverse")
-            sigmas = 1 - sigmas #原 sigmas_re 用于训练
-            # sigmas = sigmas.flip(0)  #现在 sigmas_re 用于inversion  ??? 效果不如上面的
+            #sigmas = 1 - sigmas #原 sigmas_re 用于训练
+            sigmas = sigmas.flip(0)  #现在 sigmas_re 用于inversion  ??? 效果不如上面的
         print(f"sigmas: {sigmas}")
         self.sigmas = sigmas
         self.timesteps = (sigmas[:-1] * self.config.num_train_timesteps).to(
