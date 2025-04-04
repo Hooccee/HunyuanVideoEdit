@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from einops import rearrange
-
+import cv2
 import torch
 import torchvision
 import numpy as np
@@ -84,7 +84,7 @@ def save_videos_grid(videos: torch.Tensor, path: str, rescale=False, n_rows=1, f
 
 def video_to_tensor(video_path: str, video_size: list = None, rescale=True, video_length: int = None) -> torch.Tensor:
     """
-    Convert a video file to a tensor.
+    Convert a video file to a tensor.使用OpenCV读取视频并返回tensor和原始fps
 
     Args:
         video_path (str): Path to the input video file.
@@ -94,40 +94,41 @@ def video_to_tensor(video_path: str, video_size: list = None, rescale=True, vide
 
     Returns:
         torch.Tensor: Video tensor with shape (batch, channel, time, height, width).
+        float: Original frames per second (fps) of the video.
     """
-    # 使用 imageio 读取视频文件
-    reader = imageio.get_reader(video_path, 'ffmpeg')
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"无法打开视频文件: {video_path}")
+    
+    fps = cap.get(cv2.CAP_PROP_FPS)
     frames = []
-
-    # 读取视频帧
-    for frame in reader:
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        # 转换BGR到RGB
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # 调整尺寸
         if video_size is not None:
-            frame = torchvision.transforms.functional.resize(
-                torch.from_numpy(frame).permute(2, 0, 1),
-                size=video_size,
-                antialias=True
-            ).permute(1, 2, 0).numpy()
+            frame = cv2.resize(frame, (video_size[1], video_size[0]))  # OpenCV尺寸顺序(width, height)
         frames.append(frame)
-
-    reader.close()
-
+    
+    cap.release()
+    
     # 处理视频长度
     if video_length is not None:
         if len(frames) > video_length:
-            # 如果实际帧数超过目标长度，截取前video_length帧
             frames = frames[:video_length]
         elif len(frames) < video_length:
-            # 如果实际帧数小于目标长度，复制最后一帧直到达到目标长度
-            last_frame = frames[-1]
-            while len(frames) < video_length:
-                frames.append(last_frame.copy())
-
-    # 将帧列表转换为 numpy 数组
+            last_frame = frames[-1] if frames else np.zeros((video_size[0], video_size[1], 3), dtype=np.uint8)
+            frames += [last_frame.copy()] * (video_length - len(frames))
+    
+    # 转换为tensor
     frames = np.array(frames)
-    # 转换为 torch 张量
     video_tensor = torch.from_numpy(frames).permute(3, 0, 1, 2).float()  # (T, H, W, C) -> (C, T, H, W)
-
+    
     if rescale:
         video_tensor = (video_tensor / 127.5) - 1.0  # [0, 255] -> [-1, 1]
-
-    return video_tensor
+    
+    return video_tensor, fps

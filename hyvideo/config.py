@@ -13,8 +13,15 @@ def parse_args(namespace=None):
     parser = add_inference_args(parser)
     parser = add_parallel_args(parser)
     parser = add_edit_args(parser)
+    parser = add_dataset_args(parser)
 
     args = parser.parse_args(namespace=namespace)
+    #参数互斥验证
+    try:
+        validate_args(args)
+    except argparse.ArgumentError as e:
+        parser.error(str(e))
+
     args = sanity_check_args(args)
 
     return args
@@ -314,13 +321,7 @@ def add_inference_args(parser: argparse.ArgumentParser):
         default=129,
         help="How many frames to sample from a video. if using 3d vae, the number should be 4n+1",
     )
-    # --- prompt ---
-    group.add_argument(
-        "--prompt",
-        type=str,
-        default=None,
-        help="Prompt for sampling during evaluation.",
-    )
+
     group.add_argument(
         "--seed-type",
         type=str,
@@ -387,10 +388,16 @@ def add_edit_args(parser: argparse.ArgumentParser):
     group.add_argument(
         "--inverse-video-path",
         type=str,
-        default="/home/chx/mySrc/HunyuanVideo",
+        default=None,
         help="Path to the video that needs to be inversed.",
     )
-    
+
+    group.add_argument(
+        "--prompt",
+        type=str,
+        default=None,
+        help="source Prompt for sampling during evaluation.",
+    )   
     group.add_argument(
         "--target-prompt",
         type=str,
@@ -413,6 +420,38 @@ def add_edit_args(parser: argparse.ArgumentParser):
     )
 
     return parser
+
+# ======================== Dataset setting ========================
+def add_dataset_args(parser: argparse.ArgumentParser):
+    group = parser.add_argument_group(title="Dataset args")
+    group.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        choices=["V2VBench"],
+        help="Dataset name.",
+    )
+
+    return parser
+
+def validate_args(args):
+    """参数互斥验证逻辑"""
+    edit_params = any([
+        args.inverse_video_path,
+        args.prompt, 
+        args.target_prompt
+    ])
+    
+    if args.dataset and edit_params:
+        raise argparse.ArgumentError(None, "Cannot specify both --dataset and edit parameters (--inverse-video-path/--prompt/--target-prompt)")
+        
+    if not args.dataset and not all([
+        args.inverse_video_path,
+        args.prompt, 
+        args.target_prompt
+    ]):
+        raise argparse.ArgumentError(None, "Must specify all edit parameters (--inverse-video-path/--prompt/--target-prompt) when not using --dataset")
+
 
 def sanity_check_args(args):
     # VAE channels
