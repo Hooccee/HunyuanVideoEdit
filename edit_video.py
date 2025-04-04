@@ -104,11 +104,11 @@ def main():
 
             # 模型推理（处理单个样本）
             outputs = hunyuan_video_sampler.predict(
-                prompt=source_prompt,
+                prompt=source_prompt, 
                 target_prompt=target_prompt,
                 inject=args.inject,
                 feature_path=args.feature_path,
-                video_tensor=current_video,  # 4D tensor
+                video_tensor=current_video,
                 height=args.video_size[0],
                 width=args.video_size[1],
                 video_length=args.video_length,
@@ -118,7 +118,7 @@ def main():
                 guidance_scale=args.cfg_scale,
                 num_videos_per_prompt=args.num_videos,
                 flow_shift=args.flow_shift,
-                batch_size=1,  # 单样本推理
+                batch_size=args.batch_size,
                 embedded_guidance_scale=args.embedded_cfg_scale,
                 gamma = args.gamma,  # 添加gamma参数用于控制编辑强度
                 start_timestep=args.start_timestep,  # Start time for editing (0 to 1),

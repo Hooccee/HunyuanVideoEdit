@@ -1364,6 +1364,7 @@ class HunyuanVideoPipeline(DiffusionPipeline):
 
 
         # 1. Perform inverse to get latents
+        self.transformer.to("cuda")
         latents_inv = self.inverse(
             latents,
             '',     # rf-inversion中source_prompt=''（为空）
@@ -1396,8 +1397,7 @@ class HunyuanVideoPipeline(DiffusionPipeline):
 
         # 2. Perform reverse to generate video
         latents_rev = self.reverse(
-            #latents_inv,
-            latents,
+            latents_inv,
             target_prompt,
             height,
             width,

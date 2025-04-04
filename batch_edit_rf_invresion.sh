@@ -1,0 +1,17 @@
+python edit_video.py \
+    --video-size 512 512 \
+    --video-length 25 \
+    --infer-steps 28 \
+    --inject 0 \
+    --seed 42 \
+    --embedded-cfg-scale 3.5 \
+    --flow-shift 7.0 \
+    --flow-reverse \
+    --use-cpu-offload \
+    --use-fp8 \
+    --save-path ./results/V2VBench_test \
+    --dataset "V2VBench" \
+    --gamma 0.5 \
+    --start-timestep 0\
+    --stop-timestep 0.25 \
+    --eta-reverse 0.9
