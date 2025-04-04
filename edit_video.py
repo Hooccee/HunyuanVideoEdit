@@ -72,7 +72,13 @@ def main():
         num_videos_per_prompt=args.num_videos,
         flow_shift=args.flow_shift,
         batch_size=args.batch_size,
-        embedded_guidance_scale=args.embedded_cfg_scale
+        embedded_guidance_scale=args.embedded_cfg_scale,
+        gamma = args.gamma,  # 添加gamma参数用于控制编辑强度
+        start_timestep=args.start_timestep,  # Start time for editing (0 to 1),
+        stop_timestep=args.stop_timestep,  # Stop time for editing (0 to 1),
+        eta_reverse=args.eta_reverse,  # rf_inv parameter for reverse process,
+        decay_eta=args.decay_eta,  # Whether to decay eta over steps,
+        eta_decay_power=args.eta_decay_power,  # Power for eta decay,          
     )
     samples = outputs['samples']
     # samples = [video_tensor]

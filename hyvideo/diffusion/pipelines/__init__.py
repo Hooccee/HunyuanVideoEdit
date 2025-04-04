@@ -1,1 +1,1 @@
-from .pipeline_hunyuan_video_edit_3order import HunyuanVideoPipeline
+from .pipeline_hunyuan_video_edit_rf_inv import HunyuanVideoPipeline

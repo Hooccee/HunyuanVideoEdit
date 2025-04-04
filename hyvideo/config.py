@@ -382,6 +382,7 @@ def add_parallel_args(parser: argparse.ArgumentParser):
     return parser
 
 # ======================== Edit setting ========================
+# ======================== Edit setting ========================
 def add_edit_args(parser: argparse.ArgumentParser):
     group = parser.add_argument_group(title="Edit args")
     group.add_argument(
@@ -410,6 +411,48 @@ def add_edit_args(parser: argparse.ArgumentParser):
         type=str,
         default='feature',
         help='the path to save the feature'
+    )
+    
+    group.add_argument(
+        '--gamma',
+        type=float,
+        default=0.5,
+        help='gamma parameter for controlling edit strength'
+    )
+    
+    group.add_argument(
+        '--start-timestep',
+        type=float,
+        default=0.0,
+        help='Start time for editing (0 to 1)'
+    )
+    
+    group.add_argument(
+        '--stop-timestep',
+        type=float,
+        default=0.25,
+        help='Stop time for editing (0 to 1)'
+    )
+    
+    group.add_argument(
+        '--eta-reverse',
+        type=float,
+        default=1.0,
+        help='rf_inv parameter for reverse process'
+    )
+    
+    group.add_argument(
+        '--decay-eta',
+        action='store_true',
+        default=False,
+        help='Whether to decay eta over steps'
+    )
+    
+    group.add_argument(
+        '--eta-decay-power',
+        type=float,
+        default=1.0,
+        help='Power for eta decay'
     )
 
     return parser
