@@ -534,6 +534,12 @@ class HunyuanVideoSampler(Inference):
         embedded_guidance_scale=None,
         batch_size=1,
         num_videos_per_prompt=1,
+        gamma: float = 0.5,  # 添加gamma参数用于控制编辑强度
+        start_timestep:float = 0.0,  # Start time for editing (0 to 1),
+        stop_timestep:float = 0.25,  # Stop time for editing (0 to 1),
+        eta_reverse:float = 1.0,  # rf_inv parameter for reverse process,
+        decay_eta: bool = False,  # Whether to decay eta over steps,
+        eta_decay_power: float = 1.0,  # Power for eta decay,
         **kwargs,
     ):
         """
@@ -701,6 +707,12 @@ class HunyuanVideoSampler(Inference):
             is_progress_bar=True,
             vae_ver=self.args.vae,
             enable_tiling=self.args.vae_tiling,
+            gamma = gamma,  # 添加gamma参数用于控制编辑强度
+            start_timestep=start_timestep,  # Start time for editing (0 to 1),
+            stop_timestep=stop_timestep,  # Stop time for editing (0 to 1),
+            eta_reverse=eta_reverse,  # rf_inv parameter for reverse process,
+            decay_eta=decay_eta,  # Whether to decay eta over steps,
+            eta_decay_power=eta_decay_power,  # Power for eta decay,            
         )[0]
         out_dict["samples"] = samples
         out_dict["prompts"] = prompt

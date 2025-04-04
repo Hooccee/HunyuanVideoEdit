@@ -744,6 +744,9 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         enable_tiling: bool = False,
         n_tokens: Optional[int] = None,
         embedded_guidance_scale: Optional[float] = None,
+        #TODO:添加gamma参数用于控制编辑强度*******************
+        gamma: float = 0.5,  # 添加gamma参数用于控制编辑强度
+        #***************************************************
         **kwargs,
     ):
         
@@ -838,7 +841,12 @@ class HunyuanVideoPipeline(DiffusionPipeline):
             generator=generator,
             latents=latents,
         )
+        #TODO:初始化y_1为随机噪声(与RFInversion一致)**************************
 
+        y_1 = randn_tensor(
+            latents.shape, generator=generator, device=device, dtype=prompt_embeds.dtype
+        )
+        #****************************************************************
         # 4. Denoising loop
         extra_step_kwargs = self.prepare_extra_func_kwargs(
             self.scheduler_reverse.step,
@@ -858,21 +866,23 @@ class HunyuanVideoPipeline(DiffusionPipeline):
             print(f"Step {i}: t = {t}")        
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
-            for i, t in enumerate(timesteps):
+            for i, t_curr in enumerate(timesteps[:-1]):
                 if self.interrupt:
                     continue
                 
-                print(f"Step {i}: t = {t}")
+                t_prev = timesteps[i + 1]
+                print(f"Step {i}: t_curr = {t_curr}, t_prev = {t_prev}")
+                
                 latent_model_input = (
                     torch.cat([latents] * 2)
                     if self.do_classifier_free_guidance
                     else latents
                 )
                 latent_model_input = self.scheduler_reverse.scale_model_input(
-                    latent_model_input, t
+                    latent_model_input, t_curr
                 )
 
-                t_expand = t.repeat(latent_model_input.shape[0])
+                t_expand = t_curr.repeat(latent_model_input.shape[0])
                 guidance_expand = (
                     torch.tensor(
                         [embedded_guidance_scale] * latent_model_input.shape[0],
@@ -911,10 +921,27 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                         noise_pred_text,
                         guidance_rescale=self.guidance_rescale,
                     )
+        
+        #TODO:1.修改为rf inversion 对应逻辑*****************************************************
+                # 计算当前时间步t_i
+                t_i =t_curr / 1000  # 将t转换为[0,1]范围
+                u_t_i = noise_pred
+                # 计算条件向量场u_t(Y_t|y_1)
+                y_1 = y_1.to(torch.float32)
+                latents = latents.to(torch.float32)
+                u_t_i_cond = ((y_1 - latents) / (1 - t_i))#方向指向噪声分布，与noise_pred方向相反,需加负号反向条件向量场
+                
+                # 计算控制向量场(Equation 8)
+                u_hat_t_i = u_t_i + gamma * (u_t_i_cond - u_t_i)
+                
+                # 更新潜在变量(Equation 17)
+                delta_t = t_prev - t_curr
+                latents = latents + u_hat_t_i * (delta_t/1000)
+                
+                # 恢复原始精度
+                latents = latents.to(target_dtype)
+        #TODO:1.结束***************************************************************************
 
-                latents = self.scheduler_reverse.step(
-                    noise_pred, t, latents, **extra_step_kwargs, return_dict=False
-                )[0]
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
@@ -927,9 +954,7 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                     negative_prompt_embeds = callback_outputs.pop(
                         "negative_prompt_embeds", negative_prompt_embeds
                     )
-        #TODO:1.修改为rf inversion 对应逻辑*****************************************************
 
-        #TODO:1.结束***************************************************************************
                 if i == len(timesteps) - 1 or (
                     (i + 1) > num_warmup_steps and (i + 1) % self.scheduler_reverse.order == 0
                 ):
@@ -940,9 +965,6 @@ class HunyuanVideoPipeline(DiffusionPipeline):
 
     @torch.no_grad()
     def reverse(
-        #TODO:5.修改reverse方法参数*****************************************************
-
-        #TODO:5.结束********************************************************************
         self,
         latents: torch.Tensor,
         target_prompt: Union[str, List[str]],
@@ -975,6 +997,15 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         enable_tiling: bool = False,
         n_tokens: Optional[int] = None,
         embedded_guidance_scale: Optional[float] = None,
+
+    #TODO:5.修改reverse方法参数*****************************************************
+        start_timestep: float = 0.0,  # Start time for editing (0 to 1)
+        stop_timestep: float = 0.25,  # Stop time for editing (0 to 1)
+        eta_reverse: float = 1.0,  # ReFlow parameter for reverse process
+        decay_eta: bool = False,  # Whether to decay eta over steps
+        eta_decay_power: float = 1.0,  # Power for eta decay
+        image_latents:torch.Tensor=None,
+    #TODO:5.结束********************************************************************
         **kwargs,
     ):
         # 1. Prepare the target prompt embeddings
@@ -1058,6 +1089,11 @@ class HunyuanVideoPipeline(DiffusionPipeline):
             generator=generator,
             latents=latents,
         )
+#***********************************************************************
+        # latents = randn_tensor(
+        #     latents.shape, generator=generator, device=device, dtype=prompt_embeds.dtype
+        # )
+#***********************************************************************
 
         # 3. Denoising loop
         extra_step_kwargs = self.prepare_extra_func_kwargs(
@@ -1083,9 +1119,12 @@ class HunyuanVideoPipeline(DiffusionPipeline):
 
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
-            for i, t in enumerate(timesteps):
+            for i, t_curr in enumerate(timesteps[:-1]):
                 if self.interrupt:
                     continue
+
+                t_prev = timesteps[i + 1]
+                print(f"Step {i}: t_curr = {t_curr}, t_prev = {t_prev}")
 
                 latent_model_input = (
                     torch.cat([latents] * 2)
@@ -1093,10 +1132,10 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                     else latents
                 )
                 latent_model_input = self.scheduler.scale_model_input(
-                    latent_model_input, t
+                    latent_model_input, t_curr
                 )
 
-                t_expand = t.repeat(latent_model_input.shape[0])
+                t_expand = t_curr.repeat(latent_model_input.shape[0])
                 guidance_expand = (
                     torch.tensor(
                         [embedded_guidance_scale] * latent_model_input.shape[0],
@@ -1136,9 +1175,30 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                         guidance_rescale=self.guidance_rescale,
                     )
 
-                latents = self.scheduler.step(
-                    noise_pred, t, latents, **extra_step_kwargs, return_dict=False
-                )[0]
+        #TODO:2.修改为rf reversion 对应逻辑*****************************************************
+                # 计算条件向量场v_t_cond
+                t_i = t_curr / 1000  # 将t转换为[0,1]范围
+                latents = latents.to(torch.float32)
+                image_latents = image_latents.to(torch.float32)
+
+                v_t_cond = (image_latents - latents) / (0- t_i)
+                
+                # 计算eta_t(随时间衰减)
+                eta_t = eta_reverse if start_timestep <= (i/num_inference_steps) < stop_timestep else 0.0
+                if decay_eta:
+                    eta_t = eta_t * (1 - i / num_inference_steps) **eta_decay_power
+                
+                # 计算控制向量场v_hat_t
+                noise_pred = noise_pred.to(torch.float32)
+                v_hat_t = noise_pred + eta_t * (v_t_cond - noise_pred)
+                
+                # 更新潜在变量
+                delta_t = t_prev - t_curr
+                latents = latents + v_hat_t * (delta_t/1000)
+                
+                # 恢复原始精度
+                latents = latents.to(target_dtype)
+        #TODO:2.结束***************************************************************************
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
@@ -1151,9 +1211,7 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                     negative_prompt_embeds = callback_outputs.pop(
                         "negative_prompt_embeds", negative_prompt_embeds
                     )
-        #TODO:2.修改为rf inversion 对应逻辑*****************************************************
 
-        #TODO:2.结束***************************************************************************
                 if i == len(timesteps) - 1 or (
                     (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
                 ):
@@ -1166,9 +1224,6 @@ class HunyuanVideoPipeline(DiffusionPipeline):
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
-        #TODO:3.修改__call__方法参数*****************************************************
-
-        #TODO:3.结束********************************************************************
         self,
         video_tensor: torch.Tensor,
         source_prompt: Union[str, List[str]],
@@ -1208,6 +1263,16 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         enable_tiling: bool = False,
         n_tokens: Optional[int] = None,
         embedded_guidance_scale: Optional[float] = None,
+
+    #TODO:3.修改__call__方法参数*****************************************************
+        gamma: float = 0.5,  # 添加gamma参数用于控制编辑强度
+        start_timestep:float = 0.0,  # Start time for editing (0 to 1),
+        stop_timestep:float = 0.25,  # Stop time for editing (0 to 1),
+        eta_reverse:float = 1.0,  # rf_inv parameter for reverse process,
+        decay_eta: bool = False,  # Whether to decay eta over steps,
+        eta_decay_power: float = 1.0,  # Power for eta decay,
+    #TODO:3.结束********************************************************************
+        
         **kwargs,
     ):
         
@@ -1299,9 +1364,9 @@ class HunyuanVideoPipeline(DiffusionPipeline):
 
 
         # 1. Perform inverse to get latents
-        latents = self.inverse(
+        latents_inv = self.inverse(
             latents,
-            source_prompt,
+            '',     # rf-inversion中source_prompt=''（为空）
             height,
             width,
             video_length,
@@ -1324,12 +1389,14 @@ class HunyuanVideoPipeline(DiffusionPipeline):
             vae_ver,
             enable_tiling,
             n_tokens,
-            embedded_guidance_scale,
+            1,           # rf-inversion的embedded_guidance_scale设置为1
+            gamma=gamma,  # 添加gamma参数用于控制编辑强度
             **kwargs,
         )
 
         # 2. Perform reverse to generate video
-        latents = self.reverse(
+        latents_rev = self.reverse(
+            #latents_inv,
             latents,
             target_prompt,
             height,
@@ -1355,6 +1422,13 @@ class HunyuanVideoPipeline(DiffusionPipeline):
             enable_tiling,
             n_tokens,
             embedded_guidance_scale,
+            start_timestep,
+            stop_timestep,
+            eta_reverse,
+            decay_eta,
+            eta_decay_power,
+            image_latents=latents,  # 使用原始视频张量作为条件
+
             **kwargs,
         )
         #TODO:6.结束********************************************************************
@@ -1362,27 +1436,27 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         self.transformer.to("cpu")
         if not output_type == "latent":
             expand_temporal_dim = False
-            if len(latents.shape) == 4:
+            if len(latents_rev.shape) == 4:
                 if isinstance(self.vae, AutoencoderKLCausal3D):
-                    latents = latents.unsqueeze(2)
+                    latents_rev = latents_rev.unsqueeze(2)
                     expand_temporal_dim = True
-            elif len(latents.shape) == 5:
+            elif len(latents_rev.shape) == 5:
                 pass
             else:
                 raise ValueError(
-                    f"Only support latents with shape (b, c, h, w) or (b, c, f, h, w), but got {latents.shape}."
+                    f"Only support latents_rev with shape (b, c, h, w) or (b, c, f, h, w), but got {latents_rev.shape}."
                 )
 
             if (
                 hasattr(self.vae.config, "shift_factor")
                 and self.vae.config.shift_factor
             ):
-                latents = (
-                    latents / self.vae.config.scaling_factor
+                latents_rev = (
+                    latents_rev / self.vae.config.scaling_factor
                     + self.vae.config.shift_factor
                 )
             else:
-                latents = latents / self.vae.config.scaling_factor
+                latents_rev = latents_rev / self.vae.config.scaling_factor
 
             with torch.autocast(
                 device_type="cuda", dtype=vae_dtype, enabled=vae_autocast_enabled
@@ -1390,18 +1464,18 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                 if enable_tiling:
                     self.vae.enable_tiling()
                     image = self.vae.decode(
-                        latents, return_dict=False, generator=generator
+                        latents_rev, return_dict=False, generator=generator
                     )[0]
                 else:
                     image = self.vae.decode(
-                        latents, return_dict=False, generator=generator
+                        latents_rev, return_dict=False, generator=generator
                     )[0]
 
             if expand_temporal_dim or image.shape[2] == 1:
                 image = image.squeeze(2)
 
         else:
-            image = latents
+            image = latents_rev
 
         image = (image / 2 + 0.5).clamp(0, 1)
         image = image.cpu().float()
