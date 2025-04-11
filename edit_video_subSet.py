@@ -49,13 +49,28 @@ def main():
         # ===================== 数据集模式 =====================
         processing_mode = "dataset"
         dataset = get_dataloader(args.dataset,**video_params)
+        
+        # 应用子集参数（关键修改点） ▼▼▼
+        original_indices = list(range(len(dataset)))  # 保留原始索引
+        if args.subset_range:
+            start, end = args.subset_range
+            selected_indices = original_indices[start:end]
+        elif args.num_samples:
+            selected_indices = original_indices[:args.num_samples]
+        else:
+            selected_indices = original_indices  # 完整数据集
+        
+        # 创建子集数据集
+        from torch.utils.data import Subset
+        subset_dataset = Subset(dataset, selected_indices)
+        # 重建DataLoader
         dataloader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=args.batch_size,  # 使用参数中的batch_size
+            subset_dataset,
+            batch_size=args.batch_size,
             shuffle=False,
             num_workers=4
         )
-        logger.info(f"Loaded {len(dataset)} samples from {args.dataset} dataset")
+        logger.info(f"Loaded {len(subset_dataset)} samples (subset from total {len(dataset)})")
         
     elif args.inverse_video_path:
         # ==================== 单视频模式 ====================

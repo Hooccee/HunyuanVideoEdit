@@ -431,8 +431,15 @@ def add_dataset_args(parser: argparse.ArgumentParser):
         choices=["V2VBench"],
         help="Dataset name.",
     )
-
+    # 新增子集参数
+    group.add_argument('--num-samples', type=int, default=None,
+                     help='处理前N个样本（仅数据集模式有效）')
+    group.add_argument('--subset-range', type=int, nargs=2, metavar=('START', 'END'),
+                     help='处理指定索引范围（左闭右开，仅数据集模式有效）')
     return parser
+
+
+
 
 def validate_args(args):
     """参数互斥验证逻辑"""
@@ -451,6 +458,19 @@ def validate_args(args):
         args.target_prompt
     ]):
         raise argparse.ArgumentError(None, "Must specify all edit parameters (--inverse-video-path/--prompt/--target-prompt) when not using --dataset")
+    
+    # 新增子集参数校验
+    if args.dataset:
+        if (args.num_samples is not None) and (args.subset_range is not None):
+            raise argparse.ArgumentError(None, "--num-samples与--subset-range不可同时使用")
+        if args.num_samples and args.num_samples <=0:
+            raise argparse.ArgumentError(None, "--num-samples必须为正整数")
+        if args.subset_range:
+            if len(args.subset_range)!=2 or args.subset_range[0]<0 or args.subset_range[1]<=args.subset_range[0]:
+                raise argparse.ArgumentError(None, "--subset-range需满足 0 <= START < END")
+    else:
+        if args.num_samples or args.subset_range:
+            raise argparse.ArgumentError(None, "--num-samples/--subset-range需配合--dataset使用")
 
 
 def sanity_check_args(args):
