@@ -4,3 +4,5 @@ __pycache__
 ckpts
 **.log
 .mp4
+**test**
+**.ipynb

@@ -16,7 +16,6 @@
 # Modified from diffusers==0.29.2
 #
 # ==============================================================================
-import os
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 import torch
@@ -755,8 +754,6 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         ) and not self.args.disable_autocast
 
 
-        #print(f"inverse_cross_attention_kwargs = {cross_attention_kwargs}")
-
 
         # 2. Prepare the source prompt embeddings
 
@@ -855,183 +852,66 @@ class HunyuanVideoPipeline(DiffusionPipeline):
 
         for i, t in enumerate(timesteps):
             # 打印 i 和 t
-            print(f"Step {i}: t = {t}")
-        # 使用 torch.cat 进行追加
-        timesteps = torch.cat((timesteps, torch.tensor([1000.0], dtype=torch.float32).to(timesteps.device))) 
-
-        inject_list = [True] * cross_attention_kwargs['inject_step'] + [False] * (len(timesteps[:-1]) - cross_attention_kwargs['inject_step'])
-        inject_list = inject_list[::-1] 
+            print(f"Step {i}: t = {t}")        
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
-            for i, t_curr in enumerate(timesteps[:-1]):
+            for i, t in enumerate(timesteps):
                 if self.interrupt:
                     continue
-                    
-                t_prev = timesteps[i + 1]
-                print(f"Step {i}: t_curr = {t_curr}, t_prev = {t_prev}")
                 
-                # 时间步长转换（保持原始时间单位）
-                h = (t_prev - t_curr) / 1000.0  # 归一化时间步长
-
-                # ========================================================================
-                # 阶段1：计算k1（初始预测）
-                # ========================================================================
-                latent_model_input_k1 = (
+                print(f"Step {i}: t = {t}")
+                latent_model_input = (
                     torch.cat([latents] * 2)
                     if self.do_classifier_free_guidance
                     else latents
                 )
-                latent_model_input_k1 = self.scheduler_reverse.scale_model_input(latent_model_input_k1, t_curr)
+                latent_model_input = self.scheduler_reverse.scale_model_input(
+                    latent_model_input, t
+                )
 
-                # 时间扩展参数
-                t_expand_k1 = t_curr.repeat(latent_model_input_k1.shape[0])
-                
-                # 分类器自由引导参数
+                t_expand = t.repeat(latent_model_input.shape[0])
                 guidance_expand = (
                     torch.tensor(
-                        [embedded_guidance_scale] * latent_model_input_k1.shape[0],
+                        [embedded_guidance_scale] * latent_model_input.shape[0],
                         dtype=torch.float32,
                         device=device,
-                    ).to(target_dtype) * 1000.0
+                    ).to(target_dtype)
+                    * 1000.0
                     if embedded_guidance_scale is not None
                     else None
                 )
 
-                # 注意力参数配置
-                cross_attention_kwargs.update({
-                    't': i+1,
-                    'inverse': True,
-                    'second_order': 'k1',  
-                    'inject': inject_list[i]
-                })
-
-                # 计算k1
-                with torch.autocast(device_type="cuda", dtype=target_dtype, enabled=autocast_enabled):
-                    noise_pred_k1 = self.transformer(
-                        latent_model_input_k1,
-                        t_expand_k1,
+                with torch.autocast(
+                    device_type="cuda", dtype=target_dtype, enabled=autocast_enabled
+                ):
+                    noise_pred = self.transformer(
+                        latent_model_input,
+                        t_expand,
                         text_states=prompt_embeds,
                         text_mask=prompt_mask,
                         text_states_2=prompt_embeds_2,
                         freqs_cos=freqs_cis[0],
                         freqs_sin=freqs_cis[1],
                         guidance=guidance_expand,
-                        cross_attention_kwargs=cross_attention_kwargs,
                         return_dict=True,
                     )["x"]
 
-                # 分类器自由引导融合
                 if self.do_classifier_free_guidance:
-                    noise_pred_uncond_k1, noise_pred_text_k1 = noise_pred_k1.chunk(2)
-                    noise_pred_k1 = noise_pred_uncond_k1 + self.guidance_scale * (
-                        noise_pred_text_k1 - noise_pred_uncond_k1
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + self.guidance_scale * (
+                        noise_pred_text - noise_pred_uncond
                     )
 
-                # ========================================================================
-                # 阶段2：计算k2（中点预测）
-                # ========================================================================
-                # 计算中间状态（使用float32保证精度）
-                latents_k2 = latents.to(torch.float32) + 0.5 * h * noise_pred_k1.to(torch.float32)
-                t_k2 = t_curr + 0.5 * h * 1000.0  # 恢复原始时间单位
-
-                # 准备模型输入
-                latent_model_input_k2 = (
-                    torch.cat([latents_k2.to(target_dtype)] * 2)
-                    if self.do_classifier_free_guidance
-                    else latents_k2.to(target_dtype)
-                )
-                latent_model_input_k2 = self.scheduler_reverse.scale_model_input(latent_model_input_k2, t_k2)
-
-                # 时间扩展参数
-                t_expand_k2 = t_k2.repeat(latent_model_input_k2.shape[0])
-
-                # 更新注意力参数
-                cross_attention_kwargs['second_order'] = 'k2'
-
-                # 计算k2
-                with torch.autocast(device_type="cuda", dtype=target_dtype, enabled=autocast_enabled):
-                    noise_pred_k2 = self.transformer(
-                        latent_model_input_k2,
-                        t_expand_k2,
-                        text_states=prompt_embeds,
-                        text_mask=prompt_mask,
-                        text_states_2=prompt_embeds_2,
-                        freqs_cos=freqs_cis[0],
-                        freqs_sin=freqs_cis[1],
-                        guidance=guidance_expand,
-                        cross_attention_kwargs=cross_attention_kwargs,
-                        return_dict=True,
-                    )["x"]
-
-                # 分类器自由引导融合
-                if self.do_classifier_free_guidance:
-                    noise_pred_uncond_k2, noise_pred_text_k2 = noise_pred_k2.chunk(2)
-                    noise_pred_k2 = noise_pred_uncond_k2 + self.guidance_scale * (
-                        noise_pred_text_k2 - noise_pred_uncond_k2
+                if self.do_classifier_free_guidance and self.guidance_rescale > 0.0:
+                    noise_pred = rescale_noise_cfg(
+                        noise_pred,
+                        noise_pred_text,
+                        guidance_rescale=self.guidance_rescale,
                     )
 
-                # ========================================================================
-                # 阶段3：计算k3（终点预测）
-                # ========================================================================
-                # 计算中间状态（使用k2的完整步长）
-                latents_k3 = (
-                    latents.to(torch.float32) 
-                    - h * noise_pred_k1.to(torch.float32) 
-                    + 2 * h * noise_pred_k2.to(torch.float32)
-                )
-                t_k3 = t_curr + h * 1000.0  # 完整时间步
-
-                # 准备模型输入
-                latent_model_input_k3 = (
-                    torch.cat([latents_k3.to(target_dtype)] * 2)
-                    if self.do_classifier_free_guidance
-                    else latents_k3.to(target_dtype)
-                )
-                latent_model_input_k3 = self.scheduler_reverse.scale_model_input(latent_model_input_k3, t_k3)
-
-                # 时间扩展参数
-                t_expand_k3 = t_k3.repeat(latent_model_input_k3.shape[0])
-
-                # 保持二阶模式
-                cross_attention_kwargs['second_order'] = 'k3'
-
-                # 计算k3
-                with torch.autocast(device_type="cuda", dtype=target_dtype, enabled=autocast_enabled):
-                    noise_pred_k3 = self.transformer(
-                        latent_model_input_k3,
-                        t_expand_k3,
-                        text_states=prompt_embeds,
-                        text_mask=prompt_mask,
-                        text_states_2=prompt_embeds_2,
-                        freqs_cos=freqs_cis[0],
-                        freqs_sin=freqs_cis[1],
-                        guidance=guidance_expand,
-                        cross_attention_kwargs=cross_attention_kwargs,
-                        return_dict=True,
-                    )["x"]
-
-                # 分类器自由引导融合
-                if self.do_classifier_free_guidance:
-                    noise_pred_uncond_k3, noise_pred_text_k3 = noise_pred_k3.chunk(2)
-                    noise_pred_k3 = noise_pred_uncond_k3 + self.guidance_scale * (
-                        noise_pred_text_k3 - noise_pred_uncond_k3
-                    )
-
-                # ========================================================================
-                # 最终更新（严格遵循RK3公式）
-                # ========================================================================
-                # 转换到float32进行高精度计算
-                latents = latents.to(torch.float32)
-                noise_pred_k1 = noise_pred_k1.to(torch.float32)
-                noise_pred_k2 = noise_pred_k2.to(torch.float32)
-                noise_pred_k3 = noise_pred_k3.to(torch.float32)
-
-                # RK3更新公式
-                latents = latents + h * (noise_pred_k1 + 4*noise_pred_k2 + noise_pred_k3) / 6.0
-
-                # 恢复目标精度
-                latents = latents.to(target_dtype)
-
+                latents = self.scheduler_reverse.step(
+                    noise_pred, t, latents, **extra_step_kwargs, return_dict=False
+                )[0]
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
@@ -1090,8 +970,6 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         embedded_guidance_scale: Optional[float] = None,
         **kwargs,
     ):
-
-        #print(f"reverse_cross_attention_kwargs = {cross_attention_kwargs}")
         # 1. Prepare the target prompt embeddings
         device = torch.device(f"cuda:{dist.get_rank()}") if dist.is_initialized() else self._execution_device
         (
@@ -1193,183 +1071,67 @@ class HunyuanVideoPipeline(DiffusionPipeline):
 
 
         for i, t in enumerate(timesteps):
-            # 打印 i 和 t 
-            print(f"Step {i}: t = {t}")
-        # 使用 torch.cat 进行追加
-        timesteps = torch.cat((timesteps, torch.tensor([0.0], dtype=torch.float32).to(timesteps.device)))
+            # 打印 i 和 t
+            print(f"Step {i}: t = {t}")  
 
-        inject_list = [True] * cross_attention_kwargs['inject_step'] + [False] * (len(timesteps[:-1]) - cross_attention_kwargs['inject_step'])
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
-            for i, t_curr in enumerate(timesteps[:-1]):
+            for i, t in enumerate(timesteps):
                 if self.interrupt:
                     continue
-                    
-                t_prev = timesteps[i + 1]
-                print(f"Step {i}: t_curr = {t_curr}, t_prev = {t_prev}")
-                
-                # 时间步长转换（保持原始时间单位）
-                h = (t_prev - t_curr) / 1000.0  # 归一化时间步长
 
-                # ========================================================================
-                # 阶段1：计算k1（初始预测）
-                # ========================================================================
-                # 初始预测（保持原有逻辑）
-                latent_model_input_k1 = (
+                latent_model_input = (
                     torch.cat([latents] * 2)
                     if self.do_classifier_free_guidance
                     else latents
                 )
-                latent_model_input_k1 = self.scheduler.scale_model_input(latent_model_input_k1, t_curr)
+                latent_model_input = self.scheduler.scale_model_input(
+                    latent_model_input, t
+                )
 
-                # 时间扩展参数
-                t_expand_k1 = t_curr.repeat(latent_model_input_k1.shape[0])
-                
-                # 分类器自由引导参数（保持原有逻辑）
+                t_expand = t.repeat(latent_model_input.shape[0])
                 guidance_expand = (
                     torch.tensor(
-                        [embedded_guidance_scale] * latent_model_input_k1.shape[0],
+                        [embedded_guidance_scale] * latent_model_input.shape[0],
                         dtype=torch.float32,
                         device=device,
-                    ).to(target_dtype) * 1000.0
+                    ).to(target_dtype)
+                    * 1000.0
                     if embedded_guidance_scale is not None
                     else None
                 )
 
-                # 注意力参数配置（保持原有时间索引逻辑）
-                cross_attention_kwargs.update({
-                    't': num_inference_steps - i,
-                    'inverse': False,
-                    'second_order': 'k1',  
-                    'inject': inject_list[i]
-                })
-
-                # 计算k1（保持原有噪声预测逻辑）
-                with torch.autocast(device_type="cuda", dtype=target_dtype, enabled=autocast_enabled):
-                    noise_pred_k1 = self.transformer(
-                        latent_model_input_k1,
-                        t_expand_k1,
+                with torch.autocast(
+                    device_type="cuda", dtype=target_dtype, enabled=autocast_enabled
+                ):
+                    noise_pred = self.transformer(
+                        latent_model_input,
+                        t_expand,
                         text_states=prompt_embeds,
                         text_mask=prompt_mask,
                         text_states_2=prompt_embeds_2,
                         freqs_cos=freqs_cis[0],
                         freqs_sin=freqs_cis[1],
                         guidance=guidance_expand,
-                        cross_attention_kwargs=cross_attention_kwargs,
                         return_dict=True,
                     )["x"]
 
-                # 分类器自由引导融合（保持原有逻辑）
                 if self.do_classifier_free_guidance:
-                    noise_pred_uncond_k1, noise_pred_text_k1 = noise_pred_k1.chunk(2)
-                    noise_pred_k1 = noise_pred_uncond_k1 + self.guidance_scale * (
-                        noise_pred_text_k1 - noise_pred_uncond_k1
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + self.guidance_scale * (
+                        noise_pred_text - noise_pred_uncond
                     )
 
-                # ========================================================================
-                # 阶段2：计算k2（中点预测）
-                # ========================================================================
-                # 计算中间状态（使用float32保证精度）
-                latents_k2 = latents.to(torch.float32) + 0.5 * h * noise_pred_k1.to(torch.float32)
-                t_k2 = t_curr + 0.5 * h * 1000.0  # 恢复原始时间单位
-
-                # 准备模型输入
-                latent_model_input_k2 = (
-                    torch.cat([latents_k2.to(target_dtype)] * 2)
-                    if self.do_classifier_free_guidance
-                    else latents_k2.to(target_dtype)
-                )
-                latent_model_input_k2 = self.scheduler.scale_model_input(latent_model_input_k2, t_k2)
-
-                # 时间扩展参数
-                t_expand_k2 = t_k2.repeat(latent_model_input_k2.shape[0])
-
-                # 更新注意力参数（保持二阶模式）
-                cross_attention_kwargs['second_order'] = 'k2'
-
-                # 计算k2
-                with torch.autocast(device_type="cuda", dtype=target_dtype, enabled=autocast_enabled):
-                    noise_pred_k2 = self.transformer(
-                        latent_model_input_k2,
-                        t_expand_k2,
-                        text_states=prompt_embeds,
-                        text_mask=prompt_mask,
-                        text_states_2=prompt_embeds_2,
-                        freqs_cos=freqs_cis[0],
-                        freqs_sin=freqs_cis[1],
-                        guidance=guidance_expand,
-                        cross_attention_kwargs=cross_attention_kwargs,
-                        return_dict=True,
-                    )["x"]
-
-                # 分类器自由引导融合（保持原有逻辑）
-                if self.do_classifier_free_guidance:
-                    noise_pred_uncond_k2, noise_pred_text_k2 = noise_pred_k2.chunk(2)
-                    noise_pred_k2 = noise_pred_uncond_k2 + self.guidance_scale * (
-                        noise_pred_text_k2 - noise_pred_uncond_k2
+                if self.do_classifier_free_guidance and self.guidance_rescale > 0.0:
+                    noise_pred = rescale_noise_cfg(
+                        noise_pred,
+                        noise_pred_text,
+                        guidance_rescale=self.guidance_rescale,
                     )
 
-                # ========================================================================
-                # 阶段3：计算k3（终点预测）
-                # ========================================================================
-                # 计算中间状态（使用k1和k2的组合）
-                latents_k3 = (
-                    latents.to(torch.float32) 
-                    - h * noise_pred_k1.to(torch.float32) 
-                    + 2 * h * noise_pred_k2.to(torch.float32)
-                )
-                t_k3 = t_curr + h * 1000.0  # 完整时间步
-
-                # 准备模型输入
-                latent_model_input_k3 = (
-                    torch.cat([latents_k3.to(target_dtype)] * 2)
-                    if self.do_classifier_free_guidance
-                    else latents_k3.to(target_dtype)
-                )
-                latent_model_input_k3 = self.scheduler.scale_model_input(latent_model_input_k3, t_k3)
-
-                # 时间扩展参数
-                t_expand_k3 = t_k3.repeat(latent_model_input_k3.shape[0])
-
-                # 保持二阶模式
-                cross_attention_kwargs['second_order'] = 'k3'
-
-                # 计算k3
-                with torch.autocast(device_type="cuda", dtype=target_dtype, enabled=autocast_enabled):
-                    noise_pred_k3 = self.transformer(
-                        latent_model_input_k3,
-                        t_expand_k3,
-                        text_states=prompt_embeds,
-                        text_mask=prompt_mask,
-                        text_states_2=prompt_embeds_2,
-                        freqs_cos=freqs_cis[0],
-                        freqs_sin=freqs_cis[1],
-                        guidance=guidance_expand,
-                        cross_attention_kwargs=cross_attention_kwargs,
-                        return_dict=True,
-                    )["x"]
-
-                # 分类器自由引导融合（保持原有逻辑）
-                if self.do_classifier_free_guidance:
-                    noise_pred_uncond_k3, noise_pred_text_k3 = noise_pred_k3.chunk(2)
-                    noise_pred_k3 = noise_pred_uncond_k3 + self.guidance_scale * (
-                        noise_pred_text_k3 - noise_pred_uncond_k3
-                    )
-
-                # ========================================================================
-                # 最终更新（严格遵循RK3公式）
-                # ========================================================================
-                # 转换到float32进行高精度计算
-                latents = latents.to(torch.float32)
-                noise_pred_k1 = noise_pred_k1.to(torch.float32)
-                noise_pred_k2 = noise_pred_k2.to(torch.float32)
-                noise_pred_k3 = noise_pred_k3.to(torch.float32)
-
-                # RK3更新公式
-                latents = latents + h * (noise_pred_k1 + 4*noise_pred_k2 + noise_pred_k3) / 6.0
-
-                # 恢复目标精度
-                latents = latents.to(target_dtype)
+                latents = self.scheduler.step(
+                    noise_pred, t, latents, **extra_step_kwargs, return_dict=False
+                )[0]
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
@@ -1390,7 +1152,476 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                         progress_bar.update()
 
         self.transformer.to("cpu")
+    
         return latents
+
+
+    @torch.no_grad()
+    def FlowEdit(
+        self,
+        latents: torch.Tensor,
+        target_prompt: Union[str, List[str]],  # 目标提示
+        source_prompt: Union[str, List[str]],     # 新增：源提示
+        height: int,
+        width: int,
+        video_length: int,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 7.5,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        eta: float = 0.0,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        prompt_embeds: Optional[torch.Tensor] = None,
+        num_videos_per_prompt: Optional[int] = 1,
+        attention_mask: Optional[torch.Tensor] = None,
+        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        negative_attention_mask: Optional[torch.Tensor] = None,
+        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+        guidance_rescale: float = 0.0,
+        clip_skip: Optional[int] = None,
+        callback_on_step_end: Optional[
+            Union[
+                Callable[[int, int, Dict], None],
+                PipelineCallback,
+                MultiPipelineCallbacks,
+            ]
+        ] = None,
+        callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        freqs_cis: Tuple[torch.Tensor, torch.Tensor] = None,
+        vae_ver: str = "88-4c-sd",
+        enable_tiling: bool = False,
+        n_tokens: Optional[int] = None,
+        tar_embedded_guidance_scale: Optional[float] = 5.5,       # 目标提示引导强度
+        src_embedded_guidance_scale: Optional[float] = 1.5,       # 新增：源提示引导强度
+        # FlowEditFLUX 新增参数
+        n_avg: int = 1,       # 速度场平均次数
+        n_min: int = 0,       # 最小常规采样步数
+        n_max: int = 24,      # 最大ODE编辑步数
+        **kwargs,
+    ):
+        # 1. Prepare the target prompt embeddings
+        device = torch.device(f"cuda:{dist.get_rank()}") if dist.is_initialized() else self._execution_device
+        
+        # ========== 1. 双提示编码 ==========
+        # 编码源提示
+        (
+            src_prompt_embeds,
+            src_negative_prompt_embeds,
+            src_prompt_mask,
+            src_negative_prompt_mask,
+        ) = self.encode_prompt(
+            source_prompt,
+            device,
+            num_videos_per_prompt=1,
+            do_classifier_free_guidance=self.do_classifier_free_guidance,
+            prompt_embeds=prompt_embeds,
+            attention_mask=attention_mask,
+            negative_prompt_embeds=negative_prompt_embeds,
+            negative_attention_mask=negative_attention_mask,
+            lora_scale=self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None,
+            clip_skip=self.clip_skip,
+            data_type="video",
+        )
+        if self.text_encoder_2 is not None:
+            (
+                src_prompt_embeds_2,
+                src_negative_prompt_embeds_2,
+                src_prompt_mask_2,
+                src_negative_prompt_mask_2,
+            ) = self.encode_prompt(
+                source_prompt,
+                device,
+                num_videos_per_prompt,
+                self.do_classifier_free_guidance,
+                negative_prompt,
+                prompt_embeds=None,
+                attention_mask=None,
+                negative_prompt_embeds=None,
+                negative_attention_mask=None,
+                lora_scale=self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None,
+                clip_skip=self.clip_skip,
+                text_encoder=self.text_encoder_2,
+                data_type="video",
+            )
+        else:
+            src_prompt_embeds_2 = None
+            src_negative_prompt_embeds_2 = None
+            src_prompt_mask_2 = None
+            src_negative_prompt_mask_2 = None
+
+        # For classifier free guidance, we need to do two forward passes.
+        # Here we concatenate the unconditional and text embeddings into a single batch
+        # to avoid doing two forward passes
+        if self.do_classifier_free_guidance:
+            src_prompt_embeds = torch.cat([src_negative_prompt_embeds, src_prompt_embeds])
+            if src_prompt_mask is not None:
+                src_prompt_mask = torch.cat([src_negative_prompt_mask, src_prompt_mask])
+            if src_prompt_embeds_2 is not None:
+                src_prompt_embeds_2 = torch.cat([src_negative_prompt_embeds_2, src_prompt_embeds_2])
+            if src_prompt_mask_2 is not None:
+                src_prompt_mask_2 = torch.cat([src_negative_prompt_mask_2, src_prompt_mask_2])      
+        
+           
+        # 编码目标提示   
+        (
+            tar_prompt_embeds,
+            tar_negative_prompt_embeds,
+            tar_prompt_mask,
+            tar_negative_prompt_mask,
+        ) = self.encode_prompt(
+            target_prompt,
+            device,
+            num_videos_per_prompt=1,
+            do_classifier_free_guidance=self.do_classifier_free_guidance,
+            prompt_embeds=prompt_embeds,
+            attention_mask=attention_mask,
+            negative_prompt_embeds=negative_prompt_embeds,
+            negative_attention_mask=negative_attention_mask,
+            lora_scale=self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None,
+            clip_skip=self.clip_skip,
+            data_type="video",
+        )
+        if self.text_encoder_2 is not None:
+            (
+                tar_prompt_embeds_2,
+                tar_negative_prompt_embeds_2,
+                tar_prompt_mask_2,
+                tar_negative_prompt_mask_2,
+            ) = self.encode_prompt(
+                target_prompt,
+                device,
+                num_videos_per_prompt,
+                self.do_classifier_free_guidance,
+                negative_prompt,
+                prompt_embeds=None,
+                attention_mask=None,
+                negative_prompt_embeds=None,
+                negative_attention_mask=None,
+                lora_scale=self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None,
+                clip_skip=self.clip_skip,
+                text_encoder=self.text_encoder_2,
+                data_type="video",
+            )
+        else:
+            tar_prompt_embeds_2 = None
+            tar_negative_prompt_embeds_2 = None
+            tar_prompt_mask_2 = None
+            tar_negative_prompt_mask_2 = None
+
+        # For classifier free guidance, we need to do two forward passes.
+        # Here we concatenate the unconditional and text embeddings into a single batch
+        # to avoid doing two forward passes
+        if self.do_classifier_free_guidance:
+            tar_prompt_embeds = torch.cat([tar_negative_prompt_embeds, tar_prompt_embeds])
+            if tar_prompt_mask is not None:
+                tar_prompt_mask = torch.cat([tar_negative_prompt_mask, tar_prompt_mask])
+            if tar_prompt_embeds_2 is not None:
+                tar_prompt_embeds_2 = torch.cat([tar_negative_prompt_embeds_2, tar_prompt_embeds_2])
+            if tar_prompt_mask_2 is not None:
+                tar_prompt_mask_2 = torch.cat([tar_negative_prompt_mask_2, tar_prompt_mask_2])
+
+
+
+
+        # ========== 2. 时间步配置 ==========
+        timesteps, num_inference_steps = retrieve_timesteps(
+            self.scheduler,
+            num_inference_steps,
+            device,
+            **self.prepare_extra_func_kwargs(self.scheduler.set_timesteps, {"n_tokens": n_tokens}),
+        )
+
+        # ========== 3. 潜在变量初始化 ==========
+        num_channels_latents = self.transformer.config.in_channels
+        latents = self.prepare_latents(
+            batch_size=latents.shape[0],
+            num_channels_latents=num_channels_latents,
+            height=height,
+            width=width,
+            video_length=video_length,
+            dtype=tar_prompt_embeds.dtype,
+            device=device,
+            generator=generator,
+            latents=latents,
+        )
+
+        # ========== 4. 主循环 ==========
+        extra_step_kwargs = self.prepare_extra_func_kwargs(
+            self.scheduler.step,
+            {"generator": generator, "eta": eta},
+        )
+        target_dtype = PRECISION_TO_TYPE[self.args.precision]
+        autocast_enabled = (
+            target_dtype != torch.float32
+        ) and not self.args.disable_autocast
+        vae_dtype = PRECISION_TO_TYPE[self.args.vae_precision]
+        vae_autocast_enabled = (
+            vae_dtype != torch.float32
+        ) and not self.args.disable_autocast
+
+        num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
+        self._num_timesteps = len(timesteps)
+
+        edit_latents = latents.clone()  # 初始化编辑状态
+        for i, t in enumerate(timesteps):
+            # 打印 i 和 t
+            print(f"Step {i}: t = {t}")  
+
+
+        with self.progress_bar(total=num_inference_steps) as progress_bar:
+            for i, t in enumerate(timesteps):
+                if self.interrupt:
+                    continue
+
+                # 跳过超出n_max范围的步骤
+                if num_inference_steps - i > n_max:
+                    continue
+
+                # ODE编辑阶段
+                if num_inference_steps - i > n_min:
+
+
+                    latent_model_input = (
+                        torch.cat([latents] * 2)
+                        if self.do_classifier_free_guidance
+                        else latents
+                    )
+                    latent_model_input = self.scheduler.scale_model_input(
+                        latent_model_input, t
+                    )
+
+                    zt_edit  = (
+                        torch.cat([edit_latents] * 2)
+                        if self.do_classifier_free_guidance
+                        else edit_latents
+                    )
+                    zt_edit  = self.scheduler.scale_model_input(
+                        zt_edit , t
+                    )
+
+
+                    V_delta_avg = torch.zeros_like(latent_model_input)
+
+                    t_expand = t.repeat(latent_model_input.shape[0])
+
+                    # print("src_embedded_guidance_scale: ",src_embedded_guidance_scale)
+                    # print("tar_embedded_guidance_scale: ",tar_embedded_guidance_scale)
+                    # print("source_prompt: ",source_prompt)
+                    # print("target_prompt: ",target_prompt)
+                    src_guidance_expand = (
+                        torch.tensor(
+                            [src_embedded_guidance_scale] * latent_model_input.shape[0],
+                            dtype=torch.float32,
+                            device=device,
+                        ).to(target_dtype)
+                        * 1000.0
+                        if src_embedded_guidance_scale is not None
+                        else None
+                    )
+
+                    tar_guidance_expand = (
+                        torch.tensor(
+                            [tar_embedded_guidance_scale] * latent_model_input.shape[0],
+                            dtype=torch.float32,
+                            device=device,
+                        ).to(target_dtype)
+                        * 1000.0
+                        if tar_embedded_guidance_scale is not None
+                        else None
+                    )
+
+                    t_i=t/1000
+                    print("t_i: ",t_i)
+                    for k in range(n_avg):
+                        # 生成前向噪声
+                        fwd_noise = torch.randn_like(latent_model_input)
+                        zt_src = (1 - t_i) * latent_model_input + t_i * fwd_noise
+                        zt_tar = zt_edit  + zt_src - latent_model_input
+
+                        # 计算源提示速度场
+                        with torch.autocast(
+                            device_type="cuda", dtype=target_dtype, enabled=autocast_enabled
+                        ):
+                            src_noise_pred = self.transformer(
+                                zt_src,
+                                t_expand,
+                                text_states=src_prompt_embeds,
+                                text_mask=src_prompt_mask,
+                                text_states_2=src_prompt_embeds_2,
+                                freqs_cos=freqs_cis[0],
+                                freqs_sin=freqs_cis[1],
+                                guidance=src_guidance_expand,
+                                return_dict=True,
+                            )["x"]
+
+                        if self.do_classifier_free_guidance:
+                            src_noise_pred_uncond, src_noise_pred_text = src_noise_pred.chunk(2)
+                            src_noise_pred = src_noise_pred_uncond + self.guidance_scale * (
+                                src_noise_pred_text - src_noise_pred_uncond
+                            )
+
+                        if self.do_classifier_free_guidance and self.guidance_rescale > 0.0:
+                            src_noise_pred = rescale_noise_cfg(
+                                src_noise_pred,
+                                src_noise_pred_text,
+                                guidance_rescale=self.guidance_rescale,
+                            )
+
+                        # 计算目标提示速度场
+                        with torch.autocast(
+                            device_type="cuda", dtype=target_dtype, enabled=autocast_enabled
+                        ):
+                            tar_noise_pred = self.transformer(
+                                zt_tar,
+                                t_expand,
+                                text_states=tar_prompt_embeds,
+                                text_mask=tar_prompt_mask,
+                                text_states_2=tar_prompt_embeds_2,
+                                freqs_cos=freqs_cis[0],
+                                freqs_sin=freqs_cis[1],
+                                guidance=tar_guidance_expand,
+                                return_dict=True,
+                            )["x"]
+
+                        if self.do_classifier_free_guidance:
+                            tar_noise_pred_uncond, tar_noise_pred_text = tar_noise_pred.chunk(2)
+                            tar_noise_pred = tar_noise_pred_uncond + self.guidance_scale * (
+                                tar_noise_pred_text - tar_noise_pred_uncond
+                            )
+
+                        if self.do_classifier_free_guidance and self.guidance_rescale > 0.0:
+                            tar_noise_pred = rescale_noise_cfg(
+                                tar_noise_pred,
+                                tar_noise_pred_text,
+                                guidance_rescale=self.guidance_rescale,
+                            )
+
+                        V_delta_avg += (1/n_avg) * (tar_noise_pred - src_noise_pred)
+
+                    # 欧拉法更新
+                    zt_edit  = self.scheduler.step(
+                        V_delta_avg, t, zt_edit , **extra_step_kwargs, return_dict=False
+                    )[0]
+
+                    if callback_on_step_end is not None:
+                        callback_kwargs = {}
+                        for k in callback_on_step_end_tensor_inputs:
+                            callback_kwargs[k] = locals()[k]
+                        callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
+
+                        latents = callback_outputs.pop("latents", latents)
+                        tar_prompt_embeds = callback_outputs.pop("tar_prompt_embeds", tar_prompt_embeds)
+                        tar_negative_prompt_embeds = callback_outputs.pop(
+                            "tar_negative_prompt_embeds", tar_negative_prompt_embeds
+                        )
+
+
+
+
+
+
+
+
+                # 常规采样阶段
+                else:
+                    if i == num_inference_steps - n_min:  # 初始化采样噪声
+                        
+                        latent_model_input = (
+                            torch.cat([latents] * 2)
+                            if self.do_classifier_free_guidance
+                            else latents
+                        )
+                        latent_model_input = self.scheduler.scale_model_input(
+                            latent_model_input, t
+                        )
+
+
+                        zt_edit  = (
+                            torch.cat([edit_latents] * 2)
+                            if self.do_classifier_free_guidance
+                            else edit_latents
+                        )
+                        zt_edit  = self.scheduler.scale_model_input(
+                            zt_edit , t
+                        )
+
+                        t_i=t/1000
+                        fwd_noise = torch.randn_like(latent_model_input)
+                        xt_src = (1 - t_i) * latent_model_input + t_i * fwd_noise
+                        xt_tar = zt_edit + xt_src - latent_model_input
+
+
+                    t_expand = t.repeat(latent_model_input.shape[0])
+
+                    tar_guidance_expand = (
+                        torch.tensor(
+                            [tar_embedded_guidance_scale] * latent_model_input.shape[0],
+                            dtype=torch.float32,
+                            device=device,
+                        ).to(target_dtype)
+                        * 1000.0
+                        if tar_embedded_guidance_scale is not None
+                        else None
+                    )
+
+
+
+                    with torch.autocast(
+                        device_type="cuda", dtype=target_dtype, enabled=autocast_enabled
+                    ):
+                        tar_noise_pred = self.transformer(
+                            xt_tar,
+                            t_expand,
+                            text_states=tar_prompt_embeds,
+                            text_mask=tar_prompt_mask,
+                            text_states_2=tar_prompt_embeds_2,
+                            freqs_cos=freqs_cis[0],
+                            freqs_sin=freqs_cis[1],
+                            guidance=tar_guidance_expand,
+                            return_dict=True,
+                        )["x"]
+
+                    if self.do_classifier_free_guidance:
+                        tar_noise_pred_uncond, tar_noise_pred_text = tar_noise_pred.chunk(2)
+                        tar_noise_pred = tar_noise_pred_uncond + self.guidance_scale * (
+                            tar_noise_pred_text - tar_noise_pred_uncond
+                        )
+
+                    if self.do_classifier_free_guidance and self.guidance_rescale > 0.0:
+                        tar_noise_pred = rescale_noise_cfg(
+                            tar_noise_pred,
+                            tar_noise_pred_text,
+                            guidance_rescale=self.guidance_rescale,
+                        )
+
+                    xt_tar = self.scheduler.step(
+                        tar_noise_pred, t, xt_tar, **extra_step_kwargs, return_dict=False
+                    )[0]
+
+                    if callback_on_step_end is not None:
+                        callback_kwargs = {}
+                        for k in callback_on_step_end_tensor_inputs:
+                            callback_kwargs[k] = locals()[k]
+                        callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
+
+                        latents = callback_outputs.pop("latents", latents)
+                        tar_prompt_embeds = callback_outputs.pop("tar_prompt_embeds", tar_prompt_embeds)
+                        tar_negative_prompt_embeds = callback_outputs.pop(
+                            "tar_negative_prompt_embeds", tar_negative_prompt_embeds
+                        )
+
+
+                if i == len(timesteps) - 1 or (
+                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
+                ):
+                    if progress_bar is not None:
+                        progress_bar.update()
+
+        # ========== 5. 返回结果 ==========
+        final_latents = zt_edit if n_min == 0 else xt_tar
+        self.transformer.to("cpu")
+        return final_latents
+
+
 
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
@@ -1399,8 +1630,6 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         video_tensor: torch.Tensor,
         source_prompt: Union[str, List[str]],
         target_prompt: Union[str, List[str]],
-        # inject: int,
-        # feature_path: str,
         height: int,
         width: int,
         video_length: int,
@@ -1443,50 +1672,28 @@ class HunyuanVideoPipeline(DiffusionPipeline):
         Generate video from text prompts.
 
         Args:
-            video_tensor (torch.Tensor): 
-                Input video tensor.
-            source_prompt (Union[str, List[str]]): 
-                Source text prompt.
-            target_prompt (Union[str, List[str]]): 
-                Target text prompt.
-            height (int): 
-                Height of the video.
-            width (int): 
-                Width of the video.
-            video_length (int): L
-                ength of the video.
-            data_type (str, optional): 
-                Type of data. Defaults to "video".
-            num_inference_steps (int, optional): 
-                Number of inference steps. Defaults to 50.
-            timesteps (List[int], optional): 
-                Timesteps for inference. Defaults to None.
-            sigmas (List[float], optional): 
-                Sigmas for inference. Defaults to None.
-            guidance_scale (float, optional): 
-                Guidance scale. Defaults to 7.5.
-            negative_prompt (Optional[Union[str, List[str]]], optional): 
-                Negative text prompt. Defaults to None.
-            num_videos_per_prompt (Optional[int], optional): 
-                Number of videos per prompt. Defaults to 1.
-            eta (float, optional): 
-                Eta for inference. Defaults to 0.0.
-            generator (Optional[Union[torch.Generator, List[torch.Generator]]], optional):
-                Generator for random numbers. Defaults to None.
-            latents (Optional[torch.Tensor], optional): 
-                Latents for inference. Defaults to None.
-            prompt_embeds (Optional[torch.Tensor], optional): 
-                Prompt embeddings. Defaults to None.
-            attention_mask (Optional[torch.Tensor], optional): 
-                Attention mask. Defaults to None.
-            negative_prompt_embeds (Optional[torch.Tensor], optional): 
-                Negative prompt embeddings. Defaults to None.
-            negative_attention_mask (Optional[torch.Tensor], optional): 
-                Negative attention mask. Defaults to None.
-            output_type (Optional[str], optional): 
-                Output type. Defaults to "pil".
-            return_dict (bool, optional): 
-                Whether to return a dictionary. Defaults to True.
+            video_tensor (torch.Tensor): Input video tensor.
+            source_prompt (Union[str, List[str]]): Source text prompt.
+            target_prompt (Union[str, List[str]]): Target text prompt.
+            height (int): Height of the video.
+            width (int): Width of the video.
+            video_length (int): Length of the video.
+            data_type (str, optional): Type of data. Defaults to "video".
+            num_inference_steps (int, optional): Number of inference steps. Defaults to 50.
+            timesteps (List[int], optional): Timesteps for inference. Defaults to None.
+            sigmas (List[float], optional): Sigmas for inference. Defaults to None.
+            guidance_scale (float, optional): Guidance scale. Defaults to 7.5.
+            negative_prompt (Optional[Union[str, List[str]]], optional): Negative text prompt. Defaults to None.
+            num_videos_per_prompt (Optional[int], optional): Number of videos per prompt. Defaults to 1.
+            eta (float, optional): Eta for inference. Defaults to 0.0.
+            generator (Optional[Union[torch.Generator, List[torch.Generator]]], optional): Generator for random numbers. Defaults to None.
+            latents (Optional[torch.Tensor], optional): Latents for inference. Defaults to None.
+            prompt_embeds (Optional[torch.Tensor], optional): Prompt embeddings. Defaults to None.
+            attention_mask (Optional[torch.Tensor], optional): Attention mask. Defaults to None.
+            negative_prompt_embeds (Optional[torch.Tensor], optional): Negative prompt embeddings. Defaults to None.
+            negative_attention_mask (Optional[torch.Tensor], optional): Negative attention mask. Defaults to None.
+            output_type (Optional[str], optional): Output type. Defaults to "pil".
+            return_dict (bool, optional): Whether to return a dictionary. Defaults to True.
             cross_attention_kwargs (Optional[Dict[str, Any]], optional): Cross attention kwargs. Defaults to None.
             guidance_rescale (float, optional): Guidance rescale. Defaults to 0.0.
             clip_skip (Optional[int], optional): Clip skip. Defaults to None.
@@ -1544,20 +1751,79 @@ class HunyuanVideoPipeline(DiffusionPipeline):
             latents = (latents - self.vae.config.shift_factor) * self.vae.config.scaling_factor
         else:
             latents = latents * self.vae.config.scaling_factor
-        
-        cross_attention_kwargs['op']=False
 
-        #latents = latents * 1.15
-        # 1. Perform inverse to get latents
-        self.transformer.to("cuda")
-        latents_inv1 = self.inverse(
-            latents*1.05,
+
+        # # 1. Perform inverse to get latents
+        # self.transformer.to("cuda")
+        # latents = self.inverse(
+        #     latents,
+        #     source_prompt,
+        #     height,
+        #     width,
+        #     video_length,
+        #     num_inference_steps,
+        #     guidance_scale,
+        #     negative_prompt,
+        #     eta,
+        #     generator,
+        #     prompt_embeds,
+        #     num_videos_per_prompt,
+        #     attention_mask,
+        #     negative_prompt_embeds,
+        #     negative_attention_mask,
+        #     cross_attention_kwargs,
+        #     guidance_rescale,
+        #     clip_skip,
+        #     callback_on_step_end,
+        #     callback_on_step_end_tensor_inputs,
+        #     freqs_cis,
+        #     vae_ver,
+        #     enable_tiling,
+        #     n_tokens,
+        #     embedded_guidance_scale,
+        #     **kwargs,
+        # )
+
+        # # 2. Perform reverse to generate video
+        # latents = self.reverse(
+        #     latents,
+        #     target_prompt,
+        #     height,
+        #     width,
+        #     video_length,
+        #     num_inference_steps,
+        #     guidance_scale,
+        #     negative_prompt,
+        #     eta,
+        #     generator,
+        #     prompt_embeds,
+        #     num_videos_per_prompt,
+        #     attention_mask,
+        #     negative_prompt_embeds,
+        #     negative_attention_mask,
+        #     cross_attention_kwargs,
+        #     guidance_rescale,
+        #     clip_skip,
+        #     callback_on_step_end,
+        #     callback_on_step_end_tensor_inputs,
+        #     freqs_cis,
+        #     vae_ver,
+        #     enable_tiling,
+        #     n_tokens,
+        #     embedded_guidance_scale,
+        #     **kwargs,
+        # )
+
+
+        latents = self.FlowEdit(
+            latents,
+            target_prompt,
             source_prompt,
             height,
             width,
             video_length,
             num_inference_steps,
-            guidance_scale,      #cfg蒸馏不启用
+            guidance_scale,
             negative_prompt,
             eta,
             generator,
@@ -1575,68 +1841,12 @@ class HunyuanVideoPipeline(DiffusionPipeline):
             vae_ver,
             enable_tiling,
             n_tokens,
-            embedded_guidance_scale=1,
-            **kwargs,
-        )
-
-        cross_attention_kwargs['op']=True
-        latents_inv2 = self.inverse(
-            latents*1.05,
-            target_prompt,
-            height,
-            width,
-            video_length,
-            num_inference_steps,
-            guidance_scale,     #cfg蒸馏不启用
-            negative_prompt,
-            eta,
-            generator,
-            prompt_embeds,
-            num_videos_per_prompt,
-            attention_mask,
-            negative_prompt_embeds,
-            negative_attention_mask,
-            cross_attention_kwargs,
-            guidance_rescale,
-            clip_skip,
-            callback_on_step_end,
-            callback_on_step_end_tensor_inputs,
-            freqs_cis,
-            vae_ver,
-            enable_tiling,
-            n_tokens,
-            embedded_guidance_scale=1.5,
-            **kwargs,
-        )
-        latents_inv2.to('cpu')
-
-        # 2. Perform reverse to generate video
-        latents = self.reverse(
-            latents_inv1,
-            target_prompt,
-            height,
-            width,
-            video_length,
-            num_inference_steps,
-            guidance_scale,    #cfg蒸馏不启用
-            negative_prompt,
-            eta,
-            generator,
-            prompt_embeds,
-            num_videos_per_prompt,
-            attention_mask,
-            negative_prompt_embeds,
-            negative_attention_mask,
-            cross_attention_kwargs,
-            guidance_rescale,
-            clip_skip,
-            callback_on_step_end,
-            callback_on_step_end_tensor_inputs,
-            freqs_cis,
-            vae_ver,
-            enable_tiling,
-            n_tokens,
-            embedded_guidance_scale,
+            tar_embedded_guidance_scale=embedded_guidance_scale,
+            src_embedded_guidance_scale=1.5,
+            # FlowEditFLUX 新增参数
+            n_avg=1,
+            n_min=0,
+            n_max=24,
             **kwargs,
         )
 

@@ -356,13 +356,13 @@ class MMSingleStreamBlock(nn.Module):
 
         # Apply RoPE 之前inject
         # Save the features in the memory
-        # if cross_attention_kwargs.get('op') is None or cross_attention_kwargs.get('op') == True:
-        #     if cross_attention_kwargs['inject'] and cross_attention_kwargs['id'] > 19:
-        #         feature_name = str(cross_attention_kwargs['t']) + '_' + str(cross_attention_kwargs['second_order']) + '_' + str(cross_attention_kwargs['id']) + '_' + cross_attention_kwargs['type'] + '_' + 'V'
-        #         if cross_attention_kwargs['inverse']:
-        #             cross_attention_kwargs['feature'][feature_name] = v.cpu()
-        #         else:
-        #             v = cross_attention_kwargs['feature'][feature_name].cuda()
+        if cross_attention_kwargs.get('op') is None or cross_attention_kwargs.get('op') == True:
+            if cross_attention_kwargs['inject'] and cross_attention_kwargs['id'] > 19:
+                feature_name = str(cross_attention_kwargs['t']) + '_' + str(cross_attention_kwargs['second_order']) + '_' + str(cross_attention_kwargs['id']) + '_' + cross_attention_kwargs['type'] + '_' + 'V'
+                if cross_attention_kwargs['inverse']:
+                    cross_attention_kwargs['feature'][feature_name] = v.cpu()
+                else:
+                    v = cross_attention_kwargs['feature'][feature_name].cuda()
             
                 #print(f"feature:{feature_name},shape:{len(cross_attention_kwargs['feature'])}")
                 #print("sin_cross_attention_kwargs id:",id(cross_attention_kwargs))
@@ -696,11 +696,11 @@ class HYVideoDiffusionTransformer(ModelMixin, ConfigMixin):
         x = torch.cat((img, txt), 1)
 
         cnt = 0
-        # cross_attention_kwargs['type'] = 'single'
+        cross_attention_kwargs['type'] = 'single'
 
         if len(self.single_blocks) > 0:
             for _, block in enumerate(self.single_blocks):
-                # cross_attention_kwargs['id'] = cnt
+                cross_attention_kwargs['id'] = cnt
                 single_block_args = [
                     x,
                     vec,
@@ -717,7 +717,7 @@ class HYVideoDiffusionTransformer(ModelMixin, ConfigMixin):
                 cnt += 1
 
         cnt = 0
-        # cross_attention_kwargs['id']= cnt
+        cross_attention_kwargs['id']= cnt
         img = x[:, :img_seq_len, ...]
 
         # ---------------------------- Final layer ------------------------------
